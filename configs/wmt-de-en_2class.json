@@ -1,0 +1,15 @@
+{
+    "dataset": "WMT_de_en_2class",
+    "dataset_split_seed": 42,
+    "data_dir": "/home/cbelem/projects/GEM-workshop-peft-experiments/experiments/mt_data/de-en",
+    "label_col": "label",
+    "id_col": "index",
+    "batch_size": 8,
+    "eval_batch_size": 16,
+    "grad_accum_factor": 1,
+    "num_shot": 2,
+    "length_norm": 1,
+    "mc_loss": 1,
+    "unlikely_loss": 1,
+    "eval_epoch_interval": 50
+}

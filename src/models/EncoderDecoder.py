@@ -112,7 +112,7 @@ class EncoderDecoder(LightningModule):
                 labels=lm_labels,
             )
             loss = model_output.loss
-            tensorboard_logs = {"loss": loss.item()}
+            tensorboard_logs = {"loss": loss.item()} # Add more info?
 
         if not (self.use_deepspeed or self.use_ddp) or dist.get_rank() == 0:
             self.log_dict(tensorboard_logs)
@@ -157,6 +157,8 @@ class EncoderDecoder(LightningModule):
                 .view(bs, num_choices, -1)
                 .sum(dim=-1)
             )
+
+            # Length-normalized probabilities
             if self.config.length_norm > 0:
                 choices_scores = choices_scores / torch.pow(
                     (choices_ids != self.tokenizer.pad_token_id).sum(dim=-1), self.config.length_norm
@@ -211,6 +213,26 @@ class EncoderDecoder(LightningModule):
             choices_scores = torch.cat(all_choice_scores, dim=-1)
             pred_score, prediction = choices_scores.min(dim=1)
 
+        # Update 2022-09-08, @PastelBelem8
+        # ---------------------------------------------------------------------
+        # To facilitate score analysis we will
+        # add to the batch_output the scores for all choices scores.
+        # ---------------------------------------------------------------------
+        choices_scores_all_preds = choices_scores.clone().detach()
+        # Each list concerns the scores of a specific choice
+        num_classes = choices_scores_all_preds.shape[1]
+        choices_scores_all_preds = {
+            f"log.scores_class_{i}": choices_scores[:,i].tolist() 
+            for i in range(num_classes)
+        }
+        # Update 2022-09-06, @PastelBelem8
+        # ---------------------------------------------------------------------
+        # The following piece of code considers the - normalized log probs
+        # of each choice. The score gt represents the scores of the correct
+        # predictions, whereas score_cand represent the scores of the
+        # incorrect predictions.  This requires updating the ``choices_scores``
+        # in place after determining the scores of the labels.
+        # ---------------------------------------------------------------------
         score_gt = choices_scores[range(bs), labels]
         choices_scores[range(bs), labels] = choices_scores.max(dim=-1)[0]
         score_cand = choices_scores.min(dim=-1)[0]
@@ -221,7 +243,16 @@ class EncoderDecoder(LightningModule):
             "idx": batch["idx"].tolist(),
             "log.score_gt": score_gt.tolist(),
             "log.score_cand": score_cand.tolist(),
+            # Update 2022-09-08, @PastelBelem8
+            # -----------------------------------------------------------------
+            # - log.log.scores_class_{i}: array-like with length #choices
+            #       List of list of scores per choice. The first list will
+            #       concern the predictions for the first choice for all elems
+            #       in the batch.
+            # ----------------------------------------------------------------- 
+            "current_epoch": [self.current_epoch] * len(labels),
         }
+        batch_output.update(choices_scores_all_preds)
         return batch_output
 
     def validation_step(self, batch, batch_idx):
@@ -257,7 +288,7 @@ class EncoderDecoder(LightningModule):
             for key, value in accumulated.items():
                 if key.startswith("log."):
                     metrics[key.replace("log.", "")] = mean(value)
-
+            
             result_str = json.dumps(metrics) + "\n"
             with open(self.config.dev_score_file, "a+") as f:
                 f.write(result_str)
@@ -322,3 +353,49 @@ class EncoderDecoder(LightningModule):
     def on_before_optimizer_step(self, optimizer, optimizer_idx):
         if self.config.fishmask_mode is not None:
             fishmask_plugin_on_optimizer_step(self)
+
+    # 2022-09-08: @pastelbelem8
+    # We want to evaluate the test set.
+    def test_step(self, batch, batch_idx):
+        batch_output = self.predict(batch)
+        return batch_output
+
+    def test_epoch_end(self, outputs):
+        # exchange outputs between processes
+        if self.use_deepspeed or self.use_ddp:
+            gathered_outputs = [[] for _ in range(dist.get_world_size())]
+            dist.all_gather_object(gathered_outputs, outputs)
+            if dist.get_rank() == 0:
+                outputs = [batch_output for outputs in gathered_outputs for batch_output in outputs]
+
+        if not (self.use_deepspeed or self.use_ddp) or dist.get_rank() == 0:
+            # let rank 0 collect all outputs
+            accumulated = {key: [] for key in outputs[0].keys()}
+            for batch_output in outputs:
+                for key, value in batch_output.items():
+                    accumulated[key].extend(value)
+
+            # multi-process may yield dupliated examples in the last batch
+            valid_mask = []
+            idx_set = set()
+            for idx in accumulated["idx"]:
+                valid_mask.append(idx not in idx_set)
+                idx_set.add(idx)
+            for key, values in accumulated.items():
+                accumulated[key] = [v for v, m in zip(values, valid_mask) if m]
+
+            # compute and log results
+            metrics = self.dataset_reader.compute_metric(accumulated, is_dev=False)
+            for key, value in accumulated.items():
+                if key.startswith("log."):
+                    metrics[key.replace("log.", "")] = mean(value)
+            
+            result_str = json.dumps(metrics) + "\n"
+            with open(self.config.test_score_file, "a+") as f:
+                f.write(result_str)
+            print("\n" + result_str)
+        else:
+            metrics = {}
+
+        self.save_model()
+        return metrics

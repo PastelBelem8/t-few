@@ -110,6 +110,17 @@ class Config(object):
         self.prefix_tuning_init_text = None
         self.prefix_tuning_parameterization = "mlp-512"
 
+        # --------------------------------------------------------
+        # 2022-09-06: PastelBelem8
+        #  > RealSumm: 
+        self.label_col = "label"
+        self.id_col = "index"
+        self.data_dir = "./data"
+        self.dataset_classes = 2
+        self.fine_tune_with_all = False
+        # 2022-09-08: PastelBelem8
+        # --------------------------------------------------------
+
         if filenames:
             for filename in filenames.split("+"):
                 if not os.path.exists(filename):

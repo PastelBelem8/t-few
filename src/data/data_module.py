@@ -20,10 +20,11 @@ class FinetuneDataModule(LightningDataModule):
         # make assignments here (val/train/test split)
         # called on every process in DDP
         if self.config.few_shot:
-            self.train_dataset = self.dataset_reader.read_few_shot_dataset()
+            self.train_dataset = self.dataset_reader.read_few_shot_dataset() # list of dicts
         else:
             self.train_dataset = self.dataset_reader.read_orig_dataset("train")
-        self.dev_dataset = self.dataset_reader.read_orig_dataset("validation")
+        self.dev_dataset = self.dataset_reader.read_orig_dataset("validation") # Dataset
+
         self.train_dataset = FinetuneDatasetWithTemplate(
             self.train_dataset, self.dataset_reader.get_train_template(), self.tokenizer
         )
@@ -199,3 +200,54 @@ def create_collate_fn(pad_token_id, pretrain):
         return output_batch
 
     return collate_fn
+
+
+
+class EvalDataModule(LightningDataModule):
+    def __init__(self, config, tokenizer, dataset_reader, test_only=False):
+        super().__init__()
+        self.config = config
+        self.tokenizer = tokenizer
+        self.dataset_reader = dataset_reader
+        self.test_only = test_only
+
+    def prepare_data(self):
+        # download, split, etc...
+        # only called on 1 GPU/TPU in distributed
+        if self.config.few_shot:
+            _ = self.dataset_reader.read_few_shot_dataset()
+
+    def setup(self, stage):
+        self.test_dataset = self.dataset_reader.read_orig_dataset("test") # Dataset
+
+        self.test_dataset = FinetuneDatasetWithTemplate(
+            self.test_dataset, self.dataset_reader.get_eval_template(), self.tokenizer
+        )
+        print(f"Test size {len(self.test_dataset)}")
+
+        if not self.test_only:
+            self.dev_dataset = self.dataset_reader.read_orig_dataset("validation") # Dataset
+            self.dev_dataset = FinetuneDatasetWithTemplate(
+                self.dev_dataset, self.dataset_reader.get_eval_template(), self.tokenizer
+            )
+            print(f"Dev size {len(self.dev_dataset)}")
+        
+    def val_dataloader(self):
+        if not self.test_only:
+            return torch.utils.data.DataLoader(
+                self.dev_dataset,
+                batch_size=self.config.eval_batch_size,
+                shuffle=False,
+                collate_fn=create_collate_fn(self.tokenizer.pad_token_id, pretrain=False),
+                num_workers=min([self.config.eval_batch_size, self.config.num_workers]),
+            )
+        return None
+
+    def test_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.test_dataset,
+            batch_size=self.config.eval_batch_size,
+            shuffle=False,
+            collate_fn=create_collate_fn(self.tokenizer.pad_token_id, pretrain=False),
+            num_workers=min([self.config.eval_batch_size, self.config.num_workers]),
+        )

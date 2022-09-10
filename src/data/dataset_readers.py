@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os
 import json
 import numpy as np
@@ -9,6 +10,7 @@ import csv
 from typing import Dict, List, Optional, Tuple
 import re
 import pandas as pd
+import functools
 
 
 def get_dataset_reader(config):
@@ -36,6 +38,10 @@ def get_dataset_reader(config):
         "tweet_eval_hate": RaftReader,
         "twitter_complaints": RaftReader,
         "semiconductor_org_types": RaftReader,
+        # 2022-09-05 Update
+        "REALSumm": REALSummReader,
+        "WMT_de_en": WMTReader,
+        "WMT_zh_en": WMTReader,
     }[config.dataset]
     return dataset_class(config)
 
@@ -602,3 +608,264 @@ class RaftReader(object):
         matching = [a == b for a, b in zip(accumulated["prediction"], accumulated["label"])]
         accuracy = sum(matching) / len(matching)
         return {"accuracy": accuracy}
+
+# -----------------------------------------------------------------------------
+# 2022-09-05 Update
+# -----------------------------------------------------------------------------
+class DatasetLoader:
+    def __init__(self, labels):
+        self.labels = labels
+        self.labels2ids = defaultdict(list)
+
+        for id, label in enumerate(labels):
+            self.labels2ids[label].append(id)
+    
+    def get(self, num_samples: int, strict: bool=False) -> list:
+        """Get the specified number of samples from each class.
+        
+        If strict is enabled it returns equal number of examples
+        for each class, which goes up to the minimum maximum value
+        available. When it is false, it returns the maximum number
+        of examples up to ``num_samples`` for each class. For instance,
+        if num_samples=5, but class 2 only has 2 examples, then it
+        will return the following counts {
+            "lab0": 5,
+            "lab1": 5,
+            "lab2": 2,
+        } whereas strict would only return {
+            "lab0": 2,
+            "lab1": 2,
+            "lab2": 2,
+        }.
+        """
+        results = {}
+
+        for label, ids in self.labels2ids.items():
+            actual_samples = min(num_samples, len(ids))
+            results[label] = ids[:actual_samples]
+        
+        if strict:
+            min_val = min(map(len, results.values()))
+            results = {lab: ids[:min_val] for lab, ids in results.items()}
+        
+        return functools.reduce(lambda l1, l2: l1+l2, results.values())
+
+
+class SemanticCovTemplate(object):
+    def __init__(self, config, answer_choices, *placeholders_cols):
+        # We want to avoid the need for specifying on the config files
+        # explicit column names. Instead, each reader will make the appropriate
+        # assignment of columns to the templates. 
+        # We assume the placeholder columns are passed in the filling-in same order.
+        self.template2example = {f"s{i+1}": col for i, col in enumerate(placeholders_cols)}
+        self.answer_choices = answer_choices
+        self.template = """The sentence "{s1}" expresses several ideas. Are these ideas also expressed in the sentence below? Yes or No?\n\nSentence:\n{s2}"""
+
+    def apply(self, example):
+
+        # We get the placeholder values based on the map we created in config.
+        placeholders_values = {placeholder: example[example_col] for placeholder, example_col in self.template2example.items()}
+        input_str = self.template.format(**placeholders_values)
+
+        if example["label"] == -1:
+            target_str = "Unlabeled"
+        else:
+            target_str = self.answer_choices[example["label"]]
+
+        # print("DEBUG:", input_str)
+        # print("DEBUG:", target_str)
+        return input_str, target_str
+
+    def get_answer_choices_list(self, example):
+        return self.answer_choices
+
+
+class AdequacyTemplate(SemanticCovTemplate):
+    def __init__(self, config, answer_choices, *placeholders_cols):
+        super().__init__(config, answer_choices, *placeholders_cols)
+        self.template = """I want to know whether the two sentences mean the same thing.\n\n{s1}\n{s2}\nDo they?"""
+
+
+# TODO; ABSTRACT THIS CLASS INTO A MORE GENERAL CLASS (TO BE INHERITED BY EACH DATASET READER)
+class REALSummReader:
+    """
+    REALSummReader is responsible for reading and processing dataset
+    """
+    CLASSES_2_TEXT = {
+        2: ["No", "Yes"],
+        5: ["Never", "No", "Maybe", "Yes", "Definitely"]
+    }
+
+    def __init__(self, config):
+        """
+        :param config:
+        """
+        self.config = config
+        # -------------------------------------------------------
+        # Dataset name will be one of the following:
+        # -------------------------------------------------------
+        # - 2class: handled as 2 classes
+        #   (where labels are Yes/No)
+        # 
+        # - 5class: handled as 5 classes 
+        #   (where labels are Never/No/Maybe/Yes/Definitely)
+        # -------------------------------------------------------
+        self.dataset_name = config.dataset
+        self.num_classes = config.dataset_classes
+
+        self.label_col = config.label_col or "label"
+        self.id_col = config.id_col or "id"
+
+        self.answer_choices = self.CLASSES_2_TEXT.get(self.num_classes)
+        if not self.answer_choices:
+            raise ValueError(f"Unsupported number of classes: {self.num_classes}")
+
+        self.data_dir = config.data_dir
+        self.template = SemanticCovTemplate(config, self.answer_choices, "ref_summ", "sys_summ")
+        self.fine_tune_with_all = config.fine_tune_with_all
+
+        # Align batch_size and num_shot
+        self.config.batch_size = min(self.config.batch_size, self.config.num_shot * len(self.answer_choices))
+
+    def get_canonical_filename(self, split: str):
+        if split == "validation":
+            split = "dev"
+        return f"{self.num_classes}class_{split}"
+
+    def get_train_template(self):
+        return self.template
+
+    def get_eval_template(self):
+        return self.template
+
+    def read_orig_dataset(self, split: str):
+        """
+        Read the original dataset
+
+        :param split: split of data
+        """
+        if os.path.exists(DATASETS_OFFLINE):
+            orig_data = load_from_disk(os.path.join(DATASETS_OFFLINE))
+        else:
+            if split == "train" and self.fine_tune_with_all:
+                files = {"train": self.get_canonical_filename("all") + ".csv"}
+            else:
+                files = {split: f"{self.get_canonical_filename(split)}.csv"}
+            orig_data = load_dataset(self.data_dir, data_files=files)
+
+        def rename_cols(ex):
+            return {"label": ex[self.label_col], "idx": ex[self.id_col]}
+
+        data = orig_data[split].map(rename_cols, load_from_cache_file=False)
+        return data
+
+    def read_few_shot_dataset(self):
+        # Creates a cache directory to place the dataset with the selected fewshot examples 
+        file_dir = os.path.join("data", "few_shot", self.config.dataset, f"class_{self.num_classes}", f"{self.config.num_shot}_shot")
+        if not os.path.exists(file_dir):
+            os.makedirs(file_dir)
+
+        file_path = os.path.join(file_dir, f"{self.config.few_shot_random_seed}_seed.jsonl")
+
+        if os.path.exists(file_path):
+            with open(file_path, "r") as fin:
+                data = []
+                for idx, line in enumerate(fin.readlines()):
+                    data.append(json.loads(line.strip("\n")))
+
+            return data
+        else:
+            orig_data = self.read_orig_dataset("train")
+            selected_data = self._sample_few_shot_data(orig_data)
+
+            # Dump the selected files in the dataset dir
+            with open(file_path, "w+") as fout:
+                for example in selected_data:
+                    fout.write(json.dumps(example) + "\n")
+            return selected_data
+
+    def _sample_few_shot_data(self, orig_data):
+        """Samples balanced few-shot examples, specifying ``num_shot=16``
+        means we will sample k * len(classes).
+        """
+        # Select balanced number of examples
+        loader = DatasetLoader(orig_data[self.label_col])
+        selected_ids = loader.get(self.config.num_shot, strict=False)
+        
+        rand = np.random.default_rng(self.config.few_shot_random_seed)        
+        rand.shuffle(selected_ids)        
+        selected_data = [orig_data[id] for id in selected_ids]
+
+        return selected_data
+        
+    def compute_metric(self, accumulated, is_dev=True):
+        def neg(lst):
+            return [-e for e in lst]
+
+        data = defaultdict(list)
+        for info, values in accumulated.items():
+            if info.startswith("log."):
+                values = neg(values)
+            data[info].extend(values) 
+
+        result_df = pd.DataFrame(data)
+        result_df.to_csv(self.config.dev_pred_file if is_dev else self.config.test_pred_file, index=False)
+
+        # Compute metrics
+        matching = [a == b for a, b in zip(accumulated["prediction"], accumulated["label"])]
+        accuracy = sum(matching) / len(matching)
+        metrics = {"accuracy": accuracy}
+        
+        for i in range(self.num_classes):
+            predicted = (result_df["prediction"] == i).sum()
+            true = (result_df["label"] == i).sum()
+
+            metrics[f"predicted_{i}"] = float(predicted)
+            metrics[f"true_{i}"] = float(true)
+            
+        metrics["epoch"] = float(result_df.loc[0, "current_epoch"])
+        return metrics
+
+
+class WMTReader(REALSummReader):
+    def __init__(self, config):
+        """
+        """
+        self.config = config
+        # -------------------------------------------------------
+        # Dataset name will be one of the following:
+        # -------------------------------------------------------
+        # - 2class: handled as 2 classes
+        #   (where labels are Yes/No)
+        # 
+        # - 5class: handled as 5 classes 
+        #   (where labels are Never/No/Maybe/Yes/Definitely)
+        # -------------------------------------------------------
+        self.dataset_name = config.dataset
+        self.dataset_split_seed = config.dataset_split_seed
+
+        self.subset_name = config.dataset.rpartition("_")[-1]
+        self.label_col = config.label_col or "label"
+        self.id_col = config.id_col or "id"
+
+        if self.subset_name == "2class":
+            self.answer_choices = ["No", "Yes"]
+
+        elif self.subset_name == "5class":
+            self.answer_choices = ["Never", "No", "Maybe", "Yes", "Definitely"]
+        else:
+            raise ValueError(f"Unsupported subset: {self.subset_name}")
+
+        self.data_dir = config.data_dir
+        
+        filename = self.subset_name
+        self.orig_data = load_dataset(self.data_dir, data_files={
+            "train": f"{filename}_train.csv", "dev": f"{filename}_dev.csv"
+        })
+        self.template = AdequacyTemplate(config, self.answer_choices, "mt", "ref")
+
+        # Align batch_size and num_shot
+        self.config.batch_size = min(self.config.batch_size, self.config.num_shot * len(self.answer_choices))
+
+    def get_canonical_filename(self):
+        return f"{self.subset_name}_"

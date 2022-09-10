@@ -6,7 +6,7 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from src.data import FinetuneDataModule, get_dataset_reader, PretrainDataModule
+from src.data import FinetuneDataModule, get_dataset_reader, PretrainDataModule, EvalDataModule
 from src.models.EncoderDecoder import EncoderDecoder
 from src.models.modify_model import modify_transformer
 from src.utils.Config import Config
@@ -46,7 +46,7 @@ def main(config):
         amp_backend="native",
         strategy=config.compute_strategy if config.compute_strategy != "none" else None,
         logger=logger,
-        log_every_n_steps=4,
+        log_every_n_steps=4 if (config.batch_size // config.num_shot) > 0 else 1,
         max_steps=config.num_steps,
         min_steps=config.num_steps,
         num_sanity_val_steps=-1 if config.eval_before_training else 0,
@@ -54,7 +54,16 @@ def main(config):
         accumulate_grad_batches=config.grad_accum_factor,
         gradient_clip_val=config.grad_clip_norm,
     )
+    
+    print("----- train -----")
     trainer.fit(model, datamodule)
+
+    print("----- dev -----")
+    trainer.validate(model, datamodule)
+
+    print("----- test -----")
+    datamodule = EvalDataModule(config, tokenizer, dataset_reader, test_only=True)
+    trainer.test(model, datamodule)
 
 
 if __name__ == "__main__":
