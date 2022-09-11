@@ -10,7 +10,8 @@ import csv
 from typing import Dict, List, Optional, Tuple
 import re
 import pandas as pd
-import functools
+from .custom_templates import SemanticCovTemplate, AdequacyTemplate
+from .sampling import BalancedLoader
 
 
 def get_dataset_reader(config):
@@ -42,6 +43,11 @@ def get_dataset_reader(config):
         "REALSumm": REALSummReader,
         "WMT_de_en": WMTReader,
         "WMT_zh_en": WMTReader,
+        "WMT_fi_en": WMTReader,
+        "WMT_ru_en": WMTReader,
+        "WMT_kk_en": WMTReader,
+        "WMT_gu_en": WMTReader,
+        "WMT_lt_en": WMTReader,
     }[config.dataset]
     return dataset_class(config)
 
@@ -609,97 +615,17 @@ class RaftReader(object):
         accuracy = sum(matching) / len(matching)
         return {"accuracy": accuracy}
 
+
 # -----------------------------------------------------------------------------
 # 2022-09-05 Update
 # -----------------------------------------------------------------------------
-class DatasetLoader:
-    def __init__(self, labels):
-        self.labels = labels
-        self.labels2ids = defaultdict(list)
-
-        for id, label in enumerate(labels):
-            self.labels2ids[label].append(id)
-    
-    def get(self, num_samples: int, strict: bool=False) -> list:
-        """Get the specified number of samples from each class.
-        
-        If strict is enabled it returns equal number of examples
-        for each class, which goes up to the minimum maximum value
-        available. When it is false, it returns the maximum number
-        of examples up to ``num_samples`` for each class. For instance,
-        if num_samples=5, but class 2 only has 2 examples, then it
-        will return the following counts {
-            "lab0": 5,
-            "lab1": 5,
-            "lab2": 2,
-        } whereas strict would only return {
-            "lab0": 2,
-            "lab1": 2,
-            "lab2": 2,
-        }.
-        """
-        results = {}
-
-        for label, ids in self.labels2ids.items():
-            actual_samples = min(num_samples, len(ids))
-            results[label] = ids[:actual_samples]
-        
-        if strict:
-            min_val = min(map(len, results.values()))
-            results = {lab: ids[:min_val] for lab, ids in results.items()}
-        
-        return functools.reduce(lambda l1, l2: l1+l2, results.values())
-
-
-class SemanticCovTemplate(object):
-    def __init__(self, config, answer_choices, *placeholders_cols):
-        # We want to avoid the need for specifying on the config files
-        # explicit column names. Instead, each reader will make the appropriate
-        # assignment of columns to the templates. 
-        # We assume the placeholder columns are passed in the filling-in same order.
-        self.template2example = {f"s{i+1}": col for i, col in enumerate(placeholders_cols)}
-        self.answer_choices = answer_choices
-        self.template = """The sentence "{s1}" expresses several ideas. Are these ideas also expressed in the sentence below? Yes or No?\n\nSentence:\n{s2}"""
-
-    def apply(self, example):
-
-        # We get the placeholder values based on the map we created in config.
-        placeholders_values = {placeholder: example[example_col] for placeholder, example_col in self.template2example.items()}
-        input_str = self.template.format(**placeholders_values)
-
-        if example["label"] == -1:
-            target_str = "Unlabeled"
-        else:
-            target_str = self.answer_choices[example["label"]]
-
-        # print("DEBUG:", input_str)
-        # print("DEBUG:", target_str)
-        return input_str, target_str
-
-    def get_answer_choices_list(self, example):
-        return self.answer_choices
-
-
-class AdequacyTemplate(SemanticCovTemplate):
-    def __init__(self, config, answer_choices, *placeholders_cols):
-        super().__init__(config, answer_choices, *placeholders_cols)
-        self.template = """I want to know whether the two sentences mean the same thing.\n\n{s1}\n{s2}\nDo they?"""
-
-
-# TODO; ABSTRACT THIS CLASS INTO A MORE GENERAL CLASS (TO BE INHERITED BY EACH DATASET READER)
-class REALSummReader:
-    """
-    REALSummReader is responsible for reading and processing dataset
-    """
+class CustomBaseReader:
     CLASSES_2_TEXT = {
         2: ["No", "Yes"],
         5: ["Never", "No", "Maybe", "Yes", "Definitely"]
     }
 
     def __init__(self, config):
-        """
-        :param config:
-        """
         self.config = config
         # -------------------------------------------------------
         # Dataset name will be one of the following:
@@ -721,7 +647,6 @@ class REALSummReader:
             raise ValueError(f"Unsupported number of classes: {self.num_classes}")
 
         self.data_dir = config.data_dir
-        self.template = SemanticCovTemplate(config, self.answer_choices, "ref_summ", "sys_summ")
         self.fine_tune_with_all = config.fine_tune_with_all
 
         # Align batch_size and num_shot
@@ -751,7 +676,7 @@ class REALSummReader:
                 files = {"train": self.get_canonical_filename("all") + ".csv"}
             else:
                 files = {split: f"{self.get_canonical_filename(split)}.csv"}
-            orig_data = load_dataset(self.data_dir, data_files=files)
+            orig_data = load_dataset(self.data_dir, data_files=files, cache_dir=os.environ["HF_HOME"])
 
         def rename_cols(ex):
             return {"label": ex[self.label_col], "idx": ex[self.id_col]}
@@ -789,13 +714,14 @@ class REALSummReader:
         means we will sample k * len(classes).
         """
         # Select balanced number of examples
-        loader = DatasetLoader(orig_data[self.label_col])
-        selected_ids = loader.get(self.config.num_shot, strict=False)
-        
-        rand = np.random.default_rng(self.config.few_shot_random_seed)        
-        rand.shuffle(selected_ids)        
+        loader = BalancedLoader(orig_data[self.label_col])
+        selected_ids = loader.get(
+            self.config.num_shot,
+            strict=False,
+            seed=self.config.few_shot_random_seed,
+        )
+      
         selected_data = [orig_data[id] for id in selected_ids]
-
         return selected_data
         
     def compute_metric(self, accumulated, is_dev=True):
@@ -827,45 +753,16 @@ class REALSummReader:
         return metrics
 
 
-class WMTReader(REALSummReader):
+class REALSummReader(CustomBaseReader):
     def __init__(self, config):
         """
         """
-        self.config = config
-        # -------------------------------------------------------
-        # Dataset name will be one of the following:
-        # -------------------------------------------------------
-        # - 2class: handled as 2 classes
-        #   (where labels are Yes/No)
-        # 
-        # - 5class: handled as 5 classes 
-        #   (where labels are Never/No/Maybe/Yes/Definitely)
-        # -------------------------------------------------------
-        self.dataset_name = config.dataset
-        self.dataset_split_seed = config.dataset_split_seed
+        super().__init__(config)
+        self.template = SemanticCovTemplate(config, self.answer_choices, "ref_summ", "sys_summ")
 
-        self.subset_name = config.dataset.rpartition("_")[-1]
-        self.label_col = config.label_col or "label"
-        self.id_col = config.id_col or "id"
 
-        if self.subset_name == "2class":
-            self.answer_choices = ["No", "Yes"]
-
-        elif self.subset_name == "5class":
-            self.answer_choices = ["Never", "No", "Maybe", "Yes", "Definitely"]
-        else:
-            raise ValueError(f"Unsupported subset: {self.subset_name}")
-
-        self.data_dir = config.data_dir
-        
-        filename = self.subset_name
-        self.orig_data = load_dataset(self.data_dir, data_files={
-            "train": f"{filename}_train.csv", "dev": f"{filename}_dev.csv"
-        })
+class WMTReader(CustomBaseReader):
+    def __init__(self, config):
+        super().__init__(config)
         self.template = AdequacyTemplate(config, self.answer_choices, "mt", "ref")
 
-        # Align batch_size and num_shot
-        self.config.batch_size = min(self.config.batch_size, self.config.num_shot * len(self.answer_choices))
-
-    def get_canonical_filename(self):
-        return f"{self.subset_name}_"
