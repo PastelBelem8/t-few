@@ -1,0 +1,15 @@
+{
+    "dataset": "WMT_de_en",
+    "dataset_classes": 2,
+    "data_dir": "/home/cbelem/projects/GEM-workshop-peft-experiments/experiments/mt_data/preproc/de-en",
+    "label_col": "label",
+    "id_col": "index",
+    "batch_size": 8,
+    "eval_batch_size": 16,
+    "grad_accum_factor": 1,
+    "length_norm": 1,
+    "mc_loss": 1,
+    "unlikely_loss": 1,
+    "few_shot": false,
+    "eval_before_training": true
+}
