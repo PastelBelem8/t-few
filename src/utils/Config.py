@@ -116,7 +116,7 @@ class Config(object):
         self.label_col = "label"
         self.id_col = "index"
         self.data_dir = "./data"
-        self.dataset_classes = 2
+        self.dataset_classes = None
         self.fine_tune_with_all = False
         # 2022-09-08: PastelBelem8
         # --------------------------------------------------------
