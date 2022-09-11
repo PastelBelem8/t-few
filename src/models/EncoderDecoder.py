@@ -39,7 +39,7 @@ class EncoderDecoder(LightningModule):
         if self.config.model_modifier == "intrinsic":
             from .intrinsic import intrinsic_plugin_on_step
             intrinsic_plugin_on_step(self)
-
+        
         if self.config.mc_loss > 0 or self.config.unlikely_loss > 0:
             input_ids, choices_ids, labels = batch["input_ids"], batch["answer_choices_ids"], batch["labels"]
             bs, num_choices = choices_ids.size()[:2]
@@ -95,6 +95,22 @@ class EncoderDecoder(LightningModule):
 
             loss = lm_loss + mc_loss * self.config.mc_loss + unlikely_loss * self.config.unlikely_loss
             tensorboard_logs["loss"] = loss.item()
+
+            # Update 2022-09-10 @PastelBelem8
+            # ----------------------------------------------------------------
+            # We need more transparency in each step to better understand how
+            # the shuffling of the data is affecting the distribution of the
+            # labels during training. Since counts are not comparable across
+            # different runs, we will compute their frequency too.
+            # ----------------------------------------------------------------
+            _choices_scores = choices_scores[range(bs), labels]
+            _uniq_labels = torch.unique(labels).tolist()
+
+            for label in _uniq_labels:
+                label_scores = (-1 *_choices_scores[(labels == label)]).exp()
+                tensorboard_logs.update({f"mean_score_label_{label}": float(label_scores.mean().item())})
+                tensorboard_logs.update({f"median_score_label_{label}": float(label_scores.median().item())})
+                tensorboard_logs.update({f"std_score_label_{label}": float(label_scores.std().item())})
         else:
             input_ids, target_ids = batch["input_ids"], batch["target_ids"]
             attention_mask = (input_ids != self.tokenizer.pad_token_id).float()  # [bs, max_seq_len]
@@ -112,9 +128,22 @@ class EncoderDecoder(LightningModule):
                 labels=lm_labels,
             )
             loss = model_output.loss
-            tensorboard_logs = {"loss": loss.item()} # Add more info?
+            tensorboard_logs = {"loss": loss.item()}
 
         if not (self.use_deepspeed or self.use_ddp) or dist.get_rank() == 0:
+            # Update 2022-09-10 @PastelBelem8
+            # ----------------------------------------------------------------
+            # We need more transparency in each step to better understand how
+            # the shuffling of the data is affecting the distribution of the
+            # labels during training. Since counts are not comparable across
+            # different runs, we will compute their frequency too.
+            # ----------------------------------------------------------------
+            labels = torch.unique(batch["labels"]).type(torch.int8).tolist()
+            for label in labels:
+                count_label = float((batch["labels"] == label).sum().item())
+                tensorboard_logs.update({f"count_label_{label}": count_label})
+                tensorboard_logs.update({f"freq_label_{label}": (count_label / len(batch["labels"]))})
+
             self.log_dict(tensorboard_logs)
 
         if self.global_step % self.config.save_step_interval == 0:
