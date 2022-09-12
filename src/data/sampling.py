@@ -33,7 +33,7 @@ class BalancedLoader:
         """
             
         results = {}
-        rand = np.random.default_rng()
+        rand = np.random.default_rng(seed)
 
         for label, ids in self.labels2ids.items():
             # Determine the actual number of samples to get
