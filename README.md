@@ -23,6 +23,20 @@ The steps above only needs to be done once. In addition, every time you start a 
 
 Assuming you have setup the project in the cluster, a standard way of running the experiments is through the scripts available at `~/my_project/t-few-master/bins`. All the scripts mentioned in this section refer to the fine-tuning of T0 3B models. 
 
+
+#### Training / Running an experiment
+
+The following scripts are the ones responsible for creating the experiments. 
+
+- `GEM-MT-few-shot-pretrained-3b-100k.sh` (and `GEM-SUMM-few-shot-pretrained-3b-100k`): the former runs the experiments for the MT task, whereas the latter runs the experiments for the summarization task. In order to run the MT script, you'll have to update the value of a configuration in the [MT script](https://github.com/PastelBelem8/t-few/blob/master/bin/GEM-MT-few-shot-pretrained-3b-100k.sh#L32), thus reflecting your own directory. In this case, we sugest you replace with `CONFIG_DATA_DIR=\"~/my_project/experiments/mt_data/preproc/${dataset}\"` (or the absolute version of the path if you prefer). Make sure that you keep the escaped quotes, so you don't get any errors in the parsing of the configurations. Similarly, if you run the SUMM script, you will have to update the `data_dir` configuration (either on the [config file](https://github.com/PastelBelem8/t-few/blob/master/configs/realsumm.json#L3) directly) or by overriding its value in the [script](https://github.com/PastelBelem8/t-few/blob/master/bin/GEM-SUMM-few-shot-pretrained-3b-100k.sh#L20) by adding the argument `data_dir=\"~/my_project/experiments/mt_data/preproc/${dataset}\"`.
+
+By default these scripts will run the experiments for $k=[128, 100, 64, 32, 16, 4, 2]$. You can adapt the script to run the number of shots you need. 
+To run the script we use the command: `conda activate <CONDA_ENV> && cd ~/my_project/t-few-master && source ./bin/GEM-MT-few-shot-pretrained-3b-100k.sh <GPU_DEVICE> <SEED>`. The seed is used for setting training the model and for selecting the few-shot samples. However, you can specify different seeds if you so desire by changing the value of the configs: `few_shot_random_seed=${seed} seed=${seed}`
+
+
+**Note**: When running an experiment for the first time, a directory  `~/my_project/t-few-master/data/few_shot/<DATASET_NAME>/class_{N}` is created. There you'll find for each number of shot K and each seed S the json files `<K>_shot/<S>_seed.jsonl` with the information about the fewshot examples being used (and re-used if you re-run the same exact experiment) for fine-tuning!
+
+
 #### Evaluation
 
 We create the following evaluation scripts. 
@@ -34,17 +48,6 @@ We use the following command to run the evaluation script: `$ conda activate <CO
 **note**: You can configure the output directory by changing the variable `OUTPUT_PATH`.
 
 
-#### Training / Running an experiment
-
-The following scripts are the ones responsible for creating the experiments. 
-
-- `GEM-MT-few-shot-pretrained-3b-100k.sh` (and `GEM-SUMM-few-shot-pretrained-3b-100k`): the former runs the experiments for the MT task, whereas the latter runs the experiments for the summarization task. In order to run the MT script, you'll have to update the value of a configuration in each script ([MT](https://github.com/PastelBelem8/t-few/blob/master/bin/GEM-MT-few-shot-pretrained-3b-100k.sh#L32)), thus reflecting your own directory. In this case, we sugest you replace with `CONFIG_DATA_DIR=\"~/my_project/experiments/mt_data/preproc/${dataset}\"` (or the absolute version of the path if you prefer). Make sure that you keep the escaped quotes, so you don't get any errors in the parsing of the configurations.  By default these scripts will run the experiments for $k=[128, 100, 64, 32, 16, 4, 2]$. You can adapt the script to run the number of shots you need.
-
-
-To run the script we use the command: `conda activate <CONDA_ENV> && cd ~/my_project/t-few-master && source ./bin/GEM-MT-few-shot-pretrained-3b-100k.sh <GPU_DEVICE> <SEED>`. The seed is used for setting training the model and for selecting the few-shot samples. However, you can specify different seeds if you so desire by changing the value of the configs: `few_shot_random_seed=${seed} seed=${seed}`
-
-
-**Note**: When running an experiment for the first time, a directory  `~/my_project/t-few-master/data/few_shot/<DATASET_NAME>/class_{N}` is created. There you'll find for each number of shot K and each seed S the json files `<K>_shot/<S>_seed.jsonl` with the information about the fewshot examples being used (and re-used if you re-run the same exact experiment) for fine-tuning!
 
 
 ## Run your first experiment (should work for the original T-few experiments)
