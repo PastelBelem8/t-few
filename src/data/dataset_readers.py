@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from collections import defaultdict
 import os
 import json
@@ -11,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import re
 import pandas as pd
 from .custom_templates import SemanticCovTemplate, AdequacyTemplate
-from .sampling import BalancedLoader
+from .sampling import BalancedSampler
 
 
 def get_dataset_reader(config):
@@ -39,16 +40,34 @@ def get_dataset_reader(config):
         "tweet_eval_hate": RaftReader,
         "twitter_complaints": RaftReader,
         "semiconductor_org_types": RaftReader,
+    }
+
+    # 2022-09-12 Update
+    if config.use_regress:
+        dataset_class.update({
+            "REALSumm": REALSummRegressionReader,
+            "WMT_de_en": WMTRegressionReader,
+            "WMT_zh_en": WMTRegressionReader,
+            "WMT_fi_en": WMTRegressionReader,
+            "WMT_ru_en": WMTRegressionReader,
+            "WMT_kk_en": WMTRegressionReader,
+            "WMT_gu_en": WMTRegressionReader,
+            "WMT_lt_en": WMTRegressionReader,
+        })
+    else:
+        dataset_class.update({
         # 2022-09-05 Update
-        "REALSumm": REALSummReader,
-        "WMT_de_en": WMTReader,
-        "WMT_zh_en": WMTReader,
-        "WMT_fi_en": WMTReader,
-        "WMT_ru_en": WMTReader,
-        "WMT_kk_en": WMTReader,
-        "WMT_gu_en": WMTReader,
-        "WMT_lt_en": WMTReader,
-    }[config.dataset]
+        "REALSumm": REALSummClassificationReader,
+        "WMT_de_en": WMTClassificationReader,
+        "WMT_zh_en": WMTClassificationReader,
+        "WMT_fi_en": WMTClassificationReader,
+        "WMT_ru_en": WMTClassificationReader,
+        "WMT_kk_en": WMTClassificationReader,
+        "WMT_gu_en": WMTClassificationReader,
+        "WMT_lt_en": WMTClassificationReader,
+    })
+
+    dataset_class = dataset_class[config.dataset]
     return dataset_class(config)
 
 
@@ -619,14 +638,11 @@ class RaftReader(object):
 # -----------------------------------------------------------------------------
 # 2022-09-05 Update
 # -----------------------------------------------------------------------------
-class CustomBaseReader:
-    CLASSES_2_TEXT = {
-        2: ["No", "Yes"],
-        5: ["Never", "No", "Maybe", "Yes", "Definitely"]
-    }
+class CustomBaseReader(ABC):
 
     def __init__(self, config):
         self.config = config
+        self.is_regression = config.use_regress
         # -------------------------------------------------------
         # Dataset name will be one of the following:
         # -------------------------------------------------------
@@ -635,27 +651,26 @@ class CustomBaseReader:
         # 
         # - 5class: handled as 5 classes 
         #   (where labels are Never/No/Maybe/Yes/Definitely)
+        # 
+        # - regression: handled in a token-wise fashion
         # -------------------------------------------------------
         self.dataset_name = config.dataset
-        self.num_classes = config.dataset_classes
+        self.setting = "regression" if self.is_regression else "classification"
 
         self.label_col = config.label_col or "label"
         self.id_col = config.id_col or "id"
-
-        self.answer_choices = self.CLASSES_2_TEXT.get(self.num_classes)
-        if not self.answer_choices:
-            raise ValueError(f"Unsupported number of classes: {self.num_classes}")
+        self.sampling_col = config.sampling_col
 
         self.data_dir = config.data_dir
         self.fine_tune_with_all = config.fine_tune_with_all
 
-        # Align batch_size and num_shot
-        self.config.batch_size = min(self.config.batch_size, self.config.num_shot * len(self.answer_choices))
+    @abstractmethod
+    def get_canonical_filename(self, split: str) -> str:
+        raise NotImplemented("Must be overriden by subclasses")
 
-    def get_canonical_filename(self, split: str):
-        if split == "validation":
-            split = "dev"
-        return f"{self.num_classes}class_{split}"
+    @abstractmethod
+    def compute_metric(self, accumulated: dict, is_dev: bool=True) -> dict:
+        raise NotImplemented("Must be overriden by subclasses")
 
     def get_train_template(self):
         return self.template
@@ -685,8 +700,9 @@ class CustomBaseReader:
         return data
 
     def read_few_shot_dataset(self):
+        canonical_name = self.get_canonical_filename()
         # Creates a cache directory to place the dataset with the selected fewshot examples 
-        file_dir = os.path.join("data", "few_shot", self.config.dataset, f"class_{self.num_classes}", f"{self.config.num_shot}_shot")
+        file_dir = os.path.join("data", "few_shot", self.setting, self.config.dataset, canonical_name, f"{self.config.num_shot}_shot")
         if not os.path.exists(file_dir):
             os.makedirs(file_dir)
 
@@ -714,7 +730,7 @@ class CustomBaseReader:
         means we will sample k * len(classes).
         """
         # Select balanced number of examples
-        loader = BalancedLoader(orig_data[self.label_col])
+        loader = BalancedSampler(orig_data[self.sampling_col])
         selected_ids = loader.get(
             self.config.num_shot,
             strict=False,
@@ -723,7 +739,30 @@ class CustomBaseReader:
       
         selected_data = [orig_data[id] for id in selected_ids]
         return selected_data
+
+
+class CustomClassificationReader(CustomBaseReader):
+    CLASSES_2_TEXT = {
+        2: ["No", "Yes"],
+        5: ["Never", "No", "Maybe", "Yes", "Definitely"]
+    }
+
+    def __init__(self, config):
+        super().__init__(config) # FIXME
+
+        self.num_classes = config.dataset_classes
+        self.answer_choices = self.CLASSES_2_TEXT.get(self.num_classes)
+        if not self.answer_choices:
+            raise ValueError(f"Unsupported number of classes: {self.num_classes}")
         
+        # Align batch_size and num_shot
+        self.config.batch_size = min(self.config.batch_size, self.config.num_shot * len(self.answer_choices))
+
+    def get_canonical_filename(self, split: str=None):
+        if split == "validation":
+            split = "dev"
+        return f"{self.num_classes}class_{split}" if split else f"{self.num_classes}class"
+
     def compute_metric(self, accumulated, is_dev=True):
         def neg(lst):
             return [-e for e in lst]
@@ -753,7 +792,7 @@ class CustomBaseReader:
         return metrics
 
 
-class REALSummReader(CustomBaseReader):
+class REALSummClassificationReader(CustomClassificationReader):
     def __init__(self, config):
         """
         """
@@ -761,8 +800,93 @@ class REALSummReader(CustomBaseReader):
         self.template = SemanticCovTemplate(config, self.answer_choices, "ref_summ", "sys_summ")
 
 
-class WMTReader(CustomBaseReader):
+class WMTClassificationReader(CustomClassificationReader):
     def __init__(self, config):
         super().__init__(config)
         self.template = AdequacyTemplate(config, self.answer_choices, "mt", "ref")
 
+
+class CustomRegressionReader(CustomBaseReader):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def get_canonical_filename(self, split: str=None):
+        if split == "validation":
+            split = "dev"
+
+        return f"{split}" if split else ""
+
+    def compute_metric(self, accumulated, is_dev=True):
+        def neg(lst):
+            return [-e for e in lst]
+
+        metrics = {}
+        data = defaultdict(list)
+        for info, values in accumulated.items():
+            if info == "_log.example_scores":
+                # log.example_scores is a list of dicts
+                values = [{
+                    "example_id": v["example_id"],
+                    "log.scores": neg(v["log.scores"]),
+                    "log.target": neg(v["log.target"]) 
+                } for v in values]
+            elif info.startswith("log."):
+                values = neg(values)
+            data[info].extend(values) 
+
+        result_df = pd.DataFrame(data)
+        result_df.to_csv(self.config.dev_pred_file if is_dev else self.config.test_pred_file, index=False)
+
+        num_correct = 0
+        num_digits = 0
+        errs_p, errs_t, errs, mae, mse = [], [], [], [], []
+        for p, t in zip(accumulated["prediction"], accumulated["label"]):
+            # label is already a number
+            p = p.strip() # FIXME: make sure it's the right float :)
+
+            num_correct += (p == str(t))
+            num_digits += p.isdigit()
+
+            if not p.isdigit():
+                continue
+
+            p, t = float(p), float(t)
+            err = (t - p)
+            errs_p.append(p)
+            errs_t.append(t)
+            errs.append(err)
+            mae.append(np.abs(err))
+            mse.append(err * err)
+    
+        # Dump errs for debuging purposes
+        if errs != []:
+            errs_df = pd.DataFrame({"pred": errs_p, "label": errs_t, "err": errs, "abs_err": mae, "sqr_err": mse})
+            errs_df.to_csv(self.config.dev_pred_file + ".errs" if is_dev else self.config.test_pred_file, index=False)
+        
+        metrics["accuracy"] = num_correct / len(accumulated["prediction"])
+        metrics["digits_count"] = num_digits
+        metrics["digits_pct"] = num_digits / len(accumulated["prediction"])
+
+        metrics["err_len"] = len(errs)
+        metrics["err_avg"] = np.mean(errs)
+        metrics["mae_avg"] = np.mean(mae)
+        metrics["mse_avg"] = np.mean(mse)
+        
+        metrics["err_std"] = np.std(errs)
+        metrics["mae_std"] = np.std(mae)
+        metrics["mse_std"] = np.std(mse)
+
+        metrics["epoch"] = float(result_df.loc[0, "current_epoch"])
+
+        return metrics
+
+class REALSummRegressionReader(CustomRegressionReader):
+    def __init__(self, config):
+        super().__init__(config)
+        self.template = SemanticCovTemplate(config, None, "ref_summ", "sys_summ")
+
+
+class WMTRegressionReader(CustomRegressionReader):
+    def __init__(self, config):
+        super().__init__(config)
+        self.template = AdequacyTemplate(config, None, "mt", "ref")

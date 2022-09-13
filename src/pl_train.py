@@ -7,7 +7,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from src.data import FinetuneDataModule, get_dataset_reader, PretrainDataModule, EvalDataModule
-from src.models.EncoderDecoder import EncoderDecoder
+from src.models.EncoderDecoder import EncoderDecoder, EncoderDecoderRegression
 from src.models.modify_model import modify_transformer
 from src.utils.Config import Config
 from src.utils.util import ParseKwargs, set_seeds
@@ -36,7 +36,11 @@ def main(config):
         datamodule = PretrainDataModule(config, tokenizer, dataset_reader)
     else:
         datamodule = FinetuneDataModule(config, tokenizer, dataset_reader)
-    model = EncoderDecoder(config, tokenizer, model, dataset_reader)
+    
+    if config.use_regress:
+        model = EncoderDecoderRegression(config, tokenizer, model, dataset_reader)
+    else:
+        model = EncoderDecoder(config, tokenizer, model, dataset_reader)
     logger = TensorBoardLogger(config.exp_dir, name="log")
 
     trainer = Trainer(

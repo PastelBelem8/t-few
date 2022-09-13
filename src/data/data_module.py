@@ -25,11 +25,12 @@ class FinetuneDataModule(LightningDataModule):
             self.train_dataset = self.dataset_reader.read_orig_dataset("train")
         self.dev_dataset = self.dataset_reader.read_orig_dataset("validation") # Dataset
 
+        extra_args = {} ##{"add_special_tokens": False} ## added on 12 sep 
         self.train_dataset = FinetuneDatasetWithTemplate(
-            self.train_dataset, self.dataset_reader.get_train_template(), self.tokenizer
+            self.train_dataset, self.dataset_reader.get_train_template(), self.tokenizer, **extra_args
         )
         self.dev_dataset = FinetuneDatasetWithTemplate(
-            self.dev_dataset, self.dataset_reader.get_eval_template(), self.tokenizer
+            self.dev_dataset, self.dataset_reader.get_eval_template(), self.tokenizer, **extra_args
         )
         print(f"Train size {len(self.train_dataset)}")
         print(f"Eval size {len(self.dev_dataset)}")
@@ -40,7 +41,7 @@ class FinetuneDataModule(LightningDataModule):
             batch_size=self.config.batch_size,
             shuffle=True,
             collate_fn=create_collate_fn(self.tokenizer.pad_token_id, pretrain=False),
-            drop_last=True,
+            drop_last=True, # Weird that they're dropping the last?
             num_workers=min([self.config.batch_size, self.config.num_workers]),
         )
 
@@ -72,7 +73,7 @@ class FinetuneDatasetWithTemplate(torch.utils.data.dataset.Dataset):
             template = self.templates
         example = self.dataset[key]
         input_str, target_str = template.apply(example)
-
+        
         answer_choices = template.get_answer_choices_list(example)
         if isinstance(input_str, list):
             input_ids = torch.cat(
@@ -196,7 +197,6 @@ def create_collate_fn(pad_token_id, pretrain):
                     "idx": idx,
                 }
             )
-
         return output_batch
 
     return collate_fn

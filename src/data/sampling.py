@@ -5,13 +5,17 @@ from logging import warning
 import numpy as np
 
 
-class BalancedLoader:
-    def __init__(self, labels):
-        self.labels = labels
-        self.labels2ids = defaultdict(list)
+class BalancedSampler:
+    """Balances sampling based on the unique values of a specified column.
+    
+    We designate the different unique values as bins.
+    """
+    def __init__(self, bins):
+        self.bins = bins
+        self.bins2ids = defaultdict(list)
 
-        for id, label in enumerate(labels):
-            self.labels2ids[label].append(id)
+        for id, label in enumerate(bins):
+            self.bins2ids[label].append(id)
     
     def get(self, num_samples: int, seed: int, strict: bool=False) -> list:
         """Get the specified number of samples from each class.
@@ -33,11 +37,11 @@ class BalancedLoader:
         """
             
         results = {}
-        rand = np.random.default_rng()
+        rand = np.random.default_rng(seed)
 
-        for label, ids in self.labels2ids.items():
+        for label, ids in self.bins2ids.items():
             # Determine the actual number of samples to get
-            # Since it is not guarantee that we'll have enough labels
+            # Since it is not guarantee that we'll have enough bins
             # for each label. We therefore sample as much examples of
             # each label as we can.
             actual_num_samples = min(num_samples, len(ids))
@@ -53,5 +57,6 @@ class BalancedLoader:
             min_val = min(map(len, results.values()))
             results = {lab: ids[:min_val] for lab, ids in results.items()}
         
+        print("Sampling:", results)
         return functools.reduce(lambda l1, l2: l1+l2, results.values())
 

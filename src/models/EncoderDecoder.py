@@ -9,6 +9,7 @@ from src.utils.get_scheduler import get_scheduler
 from statistics import mean
 from deepspeed.utils import zero_to_fp32
 from .fishmask import fishmask_plugin_on_init, fishmask_plugin_on_optimizer_step, fishmask_plugin_on_end
+from .utils import compute_scores_for_enc_inputs
 
 
 class EncoderDecoder(LightningModule):
@@ -428,3 +429,67 @@ class EncoderDecoder(LightningModule):
 
         self.save_model()
         return metrics
+
+
+class EncoderDecoderRegression(EncoderDecoder):
+    def __init__(self, config, tokenizer, transformer, dataset_reader):
+        super().__init__(config, tokenizer, transformer, dataset_reader)
+
+        # Get the default generation configs
+        self.generate_configs = config.regress_generate_configs
+
+    def predict(self, batch):
+        # Labels are the corresponding targets
+        input_ids, labels, target_ids = batch["input_ids"], batch["labels"], batch["target_ids"]
+
+        if not self.config.split_option_at_inference:
+            attention_mask = (input_ids != self.tokenizer.pad_token_id).float()  # [bs, max_seq_len]
+
+            model_output = self.model.generate(
+                input_ids = input_ids,
+                attention_mask=attention_mask,
+                # Force truncation (ensure the last token is always the EOS)
+                forced_eos_token_id=self.tokenizer.eos_token_id,
+                **self.generate_configs
+            )
+
+            model_logprobs, model_logprobs_per_token = compute_scores_for_enc_inputs(
+                encoded_src={"input_ids": input_ids, "attention_mask": attention_mask},
+                encoded_tgt={"input_ids": model_output},
+                model=self.model,
+                tokenizer=self.tokenizer,
+                length_norm=self.config.length_norm,
+            )
+
+            target_logprobs, target_logprobs_per_token = compute_scores_for_enc_inputs(
+                encoded_src={"input_ids": input_ids, "attention_mask": attention_mask},
+                encoded_tgt={"input_ids": target_ids},
+                model=self.model,
+                tokenizer=self.tokenizer,
+                length_norm=self.config.length_norm,
+            )
+
+            preds = [
+                self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+                for g in model_output
+            ]
+
+        else:
+            raise NotImplemented("Not implemented for custom EncoderDecoderRegression")
+
+        log_scores_per_example = [{
+            "example_id": bid,
+            "log.scores": model_logprobs_per_token[i].tolist(),
+            "log.target": target_logprobs_per_token[i].tolist(),
+            } for i, bid in enumerate(batch["idx"].tolist())]
+
+        batch_output = {
+            "prediction": preds,
+            "label": labels.tolist(),
+            "idx": batch["idx"].tolist(),
+            "log.score": model_logprobs.tolist(),
+            "log.label": target_logprobs.tolist(),
+            "_log.example_scores": log_scores_per_example,
+            "current_epoch": [self.current_epoch] * len(input_ids),
+        }
+        return batch_output
