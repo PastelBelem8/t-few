@@ -48,6 +48,63 @@ We use the following command to run the evaluation script: `$ conda activate <CO
 **note**: You can configure the output directory by changing the variable `OUTPUT_PATH`.
 
 
+#### Running the _regression_ setting
+
+Attention!! We haven't tested or spend too much time adapting the `unlikely_loss` or the `mc_loss` that were proposed originally.
+
+
+Although we call this a regression task, it's essentially open-ended generation task, where the expected output is a numerical expression. We re-use the previously implemented classification pipeline (using the expected target as the only possible answer) but replace the `EncoderDecoder.predict` implementation. The model-wise changes can be observed at `[models.EncoderDecoder.EncoderDecoderRegression](https://github.com/PastelBelem8/t-few/blob/master/src/models/EncoderDecoder.py#L434)`. We also added two additional [configurations to the config](https://github.com/PastelBelem8/t-few/blob/master/src/utils/Config.py#L121-L127): `use_regress` which defaults to False and determines whether to use the _Regression_ model or not; and `regress_generate_configs` to specify the `generate_configs` at predict time. The latter is only used in the `EncoderDecoderRegression.predict` method (e.g., you can specify nucleus sampling or top_k parameters in these configurations). When specifying the shots for the regression setting, these will be sampled based on the unique values of the specified `sampling_col`. This gives more control over the sampling. In practice, if we have a column named `bin` with 5 different values, specifying `num_shots=5` means we will have a total of `5 x 5 = 25` training samples (we sample 5 examples from each bin).
+
+In order to run a regression setting, we assume you already have the data and the code. You can run 
+
+```bash
+CUDA_VISIBLE_DEVICES=<GPU_DEVICE>
+HF_HOME=~/.cache/huggingface"
+OUTPUT_PATH=./test
+
+python -m src.pl_train -c t03b.json+realsumm_reg.json -k use_regress=True label_col=<NAME_OF_TARGET_COL> sampling_col=<SAMPLING_COL> few_shot=True num_shot=<NUM_SHOT> exp_name=realsumm_reg  
+```
+
+where `<NAME_OF_TARGET_COL>` is the name of the column with the regression target, `<SAMPLING_COL>` is the name of the sampling column (which we use to stratify the training set), `<NUM_SHOT>` is the number of shots to sample from each bin.
+
+**Note**: As mentioned above, don't forget to change the `data_dir` configuration in your config file (or passing it in the command above `data_dir=~/my_project/experiments/summ_data/regression/REALSumm`).
+
+
+
+If you're using VSCode you can add the following configuration (which may be useful for debugging the regression experiments): 
+
+```javascript
+{
+            "name": "Python: Train REALSumm Regression",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "-c", 
+                "t03b.json+realsumm_reg.json", 
+                "-k", 
+                "use_regress=True", 
+                "label_col=target", 
+                "num_shot=8",
+                "dataset_classes=None",
+                "few_shot=True",
+                "save_model=False",
+                "exp_name=realsumm_reg",
+                "allow_skip_exp=False",
+                "eval_before_training=True"
+                //, "num_steps=10"
+            ],
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1",
+                "HF_HOME": "~/.cache/huggingface",
+                "OUTPUT_PATH": "./debugging"
+            },
+            "cwd": "${workspaceFolder}/t-few-master"
+        }
+```
+
 
 
 ## Run your first experiment (should work for the original T-few experiments)
