@@ -1,13 +1,11 @@
+from dataclasses import is_dataclass
 import os
 import torch
 import argparse
 from datetime import datetime
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from pytorch_lightning import Trainer
-from pytorch_lightning.loggers import TensorBoardLogger
 
-from src.data import FinetuneDataModule, get_dataset_reader, PretrainDataModule, EvalDataModule
-from src.models.EncoderDecoder import EncoderDecoder, EncoderDecoderRegression
+from src.data import FinetuneDatasetWithTemplate, get_dataset_reader, create_collate_fn
 from src.models.modify_model import modify_transformer
 from src.utils.Config import Config
 from src.utils.util import ParseKwargs, set_seeds
@@ -32,43 +30,39 @@ def main(config):
 
     tokenizer, model = get_transformer(config)
     dataset_reader = get_dataset_reader(config)
-    if config.dataset == "T0Mixture":
-        datamodule = PretrainDataModule(config, tokenizer, dataset_reader)
-    else:
-        datamodule = FinetuneDataModule(config, tokenizer, dataset_reader)
     
-    if config.use_regress:
-        model = EncoderDecoderRegression(config, tokenizer, model, dataset_reader)
-    else:
-        model = EncoderDecoder(config, tokenizer, model, dataset_reader)
-    logger = TensorBoardLogger(config.exp_dir, name="log")
+    extra_args = {"add_special_tokens": config.add_special_tokens}
 
-    trainer = Trainer(
-        enable_checkpointing=False,
-        gpus=torch.cuda.device_count(),
-        precision=config.compute_precision,
-        amp_backend="native",
-        strategy=config.compute_strategy if config.compute_strategy != "none" else None,
-        logger=logger,
-        log_every_n_steps=4,
-        max_steps=config.num_steps,
-        min_steps=config.num_steps,
-        num_sanity_val_steps=-1 if config.eval_before_training else 0,
-        check_val_every_n_epoch=config.eval_epoch_interval,
-        accumulate_grad_batches=config.grad_accum_factor,
-        gradient_clip_val=config.grad_clip_norm,
+    dev_dataset = dataset_reader.read_orig_dataset("validation") # Dataset
+    dev_dataset = FinetuneDatasetWithTemplate(
+        dev_dataset, dataset_reader.get_eval_template(), tokenizer, **extra_args
     )
-    
-    print("----- train -----")
-    trainer.fit(model, datamodule)
+    dev_loader = torch.utils.data.DataLoader(
+        dev_dataset,
+        batch_size=config.eval_batch_size,
+        shuffle=False,
+        collate_fn=create_collate_fn(tokenizer.pad_token_id, pretrain=False),
+        num_workers=min([config.eval_batch_size, config.num_workers]),
+    )
 
-    print("----- dev -----")
-    trainer.validate(model, datamodule)
+    count_seqs_truncated = 0
+    dataset_size = 0
+    ids = []
 
-    print("----- test -----")
-    datamodule = EvalDataModule(config, tokenizer, dataset_reader, test_only=True)
-    trainer.test(model, datamodule)
+    for i, batch in enumerate(dev_loader):
+        dataset_size += len(batch)
+        batch_ids = batch["idx"]
+        input_seq_len = batch["input_seq_len"]
+        truncated_exs = [(l, i.item()) for l, i in zip(input_seq_len, batch_ids) if l >= 256]
+        if truncated_exs:
+            input_seq_len, batch_ids = zip(*truncated_exs)
+            count_seqs_truncated += len(input_seq_len)
+            ids.extend(batch_ids)
 
+
+    print()
+    print("Truncated (out of total dev examples):", count_seqs_truncated, f"({dataset_size})")
+    print(ids)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

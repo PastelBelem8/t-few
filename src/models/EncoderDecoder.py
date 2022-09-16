@@ -60,15 +60,18 @@ class EncoderDecoder(LightningModule):
                 decoder_input_ids=decoder_input_ids,
                 decoder_attention_mask=decoder_attention_mask,
             )
+
             choices_scores = (
                 F.cross_entropy(model_output.logits.flatten(0, 1), lm_target.flatten(0, 1), reduction="none")
                 .view(bs, num_choices, -1)
                 .sum(dim=-1)
             )
+
             if self.config.length_norm > 0:
                 choices_scores = choices_scores / torch.pow(
                     (choices_ids != self.tokenizer.pad_token_id).sum(dim=-1), self.config.length_norm
                 )
+        
             lm_loss = F.cross_entropy(
                 model_output.logits.view(bs, num_choices, *model_output.logits.size()[1:])[range(bs), labels].flatten(
                     0, 1
@@ -96,7 +99,6 @@ class EncoderDecoder(LightningModule):
 
             loss = lm_loss + mc_loss * self.config.mc_loss + unlikely_loss * self.config.unlikely_loss
             tensorboard_logs["loss"] = loss.item()
-
             # Update 2022-09-10 @PastelBelem8
             # ----------------------------------------------------------------
             # We need more transparency in each step to better understand how
@@ -145,6 +147,14 @@ class EncoderDecoder(LightningModule):
                 tensorboard_logs.update({f"count_label_{label}": count_label})
                 tensorboard_logs.update({f"freq_label_{label}": (count_label / len(batch["labels"]))})
 
+            # Update 2022-09-13 @PastelBelem8 - had a bug, will try to fix it later
+            # ----------------------------------------------------------------
+            # Added these values to the batch to keep track of whether the model
+            # gets a chance to see the full template or not.
+            # ----------------------------------------------------------------
+            tensorboard_logs["num_truncated_tokens_avg"] = float(mean(batch["num_truncated"]))
+            tensorboard_logs["num_truncated_tokens_total"] = float(sum(batch["num_truncated"]))
+            tensorboard_logs["num_truncated_inputs"] = sum([1.0 if n > 0 else 0.0 for n in batch["num_truncated"]])
             self.log_dict(tensorboard_logs)
 
         if self.global_step % self.config.save_step_interval == 0:
@@ -163,10 +173,10 @@ class EncoderDecoder(LightningModule):
             from .intrinsic import intrinsic_plugin_on_step
             intrinsic_plugin_on_step(self)
 
-        input_ids, choices_ids, labels = batch["input_ids"], batch["answer_choices_ids"], batch["labels"]
-
         if not self.config.split_option_at_inference:
+            input_ids, choices_ids, labels = batch["input_ids"], batch["answer_choices_ids"], batch["labels"]
             bs, num_choices = choices_ids.size()[:2]
+            
             flat_choices_ids = choices_ids.flatten(0, 1)
             attention_mask = (input_ids != self.tokenizer.pad_token_id).float()  # [bs, max_seq_len]
             encoder_hidden_states = self.model.encoder(input_ids=input_ids, attention_mask=attention_mask)[0]
@@ -182,18 +192,57 @@ class EncoderDecoder(LightningModule):
                 decoder_input_ids=decoder_input_ids,
                 decoder_attention_mask=decoder_attention_mask,
             )
+
+            for i in range(bs):
+                assert (torch.eq(model_output.logits[i*2, 0], model_output.logits[i*2+1, 0]).all().item())
+
             choices_scores = (
                 F.cross_entropy(model_output.logits.flatten(0, 1), lm_target.flatten(0, 1), reduction="none")
                 .view(bs, num_choices, -1)
                 .sum(dim=-1)
             )
 
+            proba = torch.exp(-1 * choices_scores.clone().detach()).sum(dim=-1)
+            invalid_probas = [p.item() for p in proba if p > 1]
+
+            if len(invalid_probas) > 1:
+                print("(inference) Mean invalid probas (before norm):", mean(invalid_probas))
+                print("(inference) Invalid probas (before norm):", invalid_probas)
+
+            # Update 2022-09-14, @PastelBelem8
+            # ---------------------------------------------------------------------
+            # To facilitate score analysis we will add to the batch_output the
+            # scores for all choices scores.
+            # ---------------------------------------------------------------------
+            # Update 2022-09-16
+            # The length normalization is taking an effect on the probability scores
+            # hence, we dump them to the file before they get normalized.
+            # The normalized scores will be available in the final `log.scores_gt`
+            # and `log.scores_cand`.
+            # ---------------------------------------------------------------------
+            choices_scores_all_preds = choices_scores.clone().detach()
+            # Each list concerns the scores of a specific choice
+            num_classes = choices_scores_all_preds.shape[1]
+            choices_scores_all_preds = {
+                f"log.scores_class_{i}": choices_scores[:,i].tolist() 
+                for i in range(num_classes)
+            }
+            # ---------------------------------------------------------------------
             # Length-normalized probabilities
             if self.config.length_norm > 0:
                 choices_scores = choices_scores / torch.pow(
                     (choices_ids != self.tokenizer.pad_token_id).sum(dim=-1), self.config.length_norm
                 )
             pred_score, prediction = choices_scores.min(dim=1)
+
+            proba_after = torch.exp(-1 * choices_scores.clone().detach()).sum(dim=-1)
+            invalid_probas_after = [p.item() for p in proba_after if p > 1]
+            
+            if len(invalid_probas_after) > 1:
+                print("(inference) Mean invalid probas (after norm vs before):", 
+                    mean(invalid_probas_after), "vs", mean(invalid_probas) if invalid_probas else "---")
+                print("(inference) Invalid probas (after norm):",
+                    invalid_probas_after, "vs", invalid_probas)
 
         else:
             bs, num_choices = choices_ids.size()[:2]
@@ -233,6 +282,7 @@ class EncoderDecoder(LightningModule):
                     .view(bs, half_num_choices, -1)
                     .sum(dim=-1)
                 )
+                
                 if self.config.length_norm > 0:
                     choices_scores = choices_scores / torch.pow(
                         (half_choice_ids != self.tokenizer.pad_token_id).sum(dim=-1), self.config.length_norm
@@ -243,18 +293,6 @@ class EncoderDecoder(LightningModule):
             choices_scores = torch.cat(all_choice_scores, dim=-1)
             pred_score, prediction = choices_scores.min(dim=1)
 
-        # Update 2022-09-08, @PastelBelem8
-        # ---------------------------------------------------------------------
-        # To facilitate score analysis we will
-        # add to the batch_output the scores for all choices scores.
-        # ---------------------------------------------------------------------
-        choices_scores_all_preds = choices_scores.clone().detach()
-        # Each list concerns the scores of a specific choice
-        num_classes = choices_scores_all_preds.shape[1]
-        choices_scores_all_preds = {
-            f"log.scores_class_{i}": choices_scores[:,i].tolist() 
-            for i in range(num_classes)
-        }
         # Update 2022-09-06, @PastelBelem8
         # ---------------------------------------------------------------------
         # The following piece of code considers the - normalized log probs
@@ -281,6 +319,12 @@ class EncoderDecoder(LightningModule):
             #       in the batch.
             # ----------------------------------------------------------------- 
             "current_epoch": [self.current_epoch] * len(labels),
+
+            # Update 2022-09-13, @PastelBelem8 -- had a bug using version 4.13
+            # -----------------------------------------------------------------
+            # It is important to keep track of the number of truncated examples.
+            # -----------------------------------------------------------------
+            "num_truncated": batch["num_truncated"],
         }
         batch_output.update(choices_scores_all_preds)
         return batch_output
@@ -491,5 +535,7 @@ class EncoderDecoderRegression(EncoderDecoder):
             "log.label": target_logprobs.tolist(),
             "_log.example_scores": log_scores_per_example,
             "current_epoch": [self.current_epoch] * len(input_ids),
+            # "input_num_truncated_tokens": batch["input_num_truncated_tokens"],
+            # "target_num_truncated_tokens": batch["target_num_truncated_tokens"],
         }
         return batch_output

@@ -1,0 +1,18 @@
+{
+    "dataset": "REALSumm",
+    "use_regress": true,
+    "data_dir": "/home/cbelem/projects/GEM-workshop-peft-experiments/experiments/summ_data/regression/REALSumm",
+    "label_col": "target",
+    "id_col": "index",
+    "sampling_col": "bin",
+    "batch_size": 8,
+    "eval_batch_size": 16,
+    "grad_accum_factor": 1,
+    "length_norm": 0,
+    "mc_loss": 0,
+    "unlikely_loss": 0,
+    "few_shot": false,
+    "eval_before_training": true,
+    "eval_epoch_interval": 100,
+    "allow_skip_exp": false
+}

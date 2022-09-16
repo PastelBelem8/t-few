@@ -31,7 +31,7 @@ do
         CONFIG_DATASET="WMT_${src_lang}_en"
         CONFIG_DATA_DIR=\"/home/cbelem/projects/GEM-workshop-peft-experiments/experiments/mt_data/preproc/${dataset}\"
 
-        for k in 128 100 64 32 16 4 2
+        for k in 200 100 64 32 16 4 2
         do
             EXP_NAME=t03b_${dataset}_seed${seed}_shots${k}_ia3_pretrained100k 
             python -m src.pl_train -c ${CONFIG_FILES} -k load_weight="pretrained_checkpoints/t03b_ia3_finish.pt" dataset_classes=${n_classes} exp_name=${EXP_NAME} few_shot=True num_shot=${k} few_shot_random_seed=${seed} seed=${seed} dataset=${CONFIG_DATASET} data_dir=${CONFIG_DATA_DIR}

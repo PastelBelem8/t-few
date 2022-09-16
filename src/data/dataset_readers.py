@@ -209,7 +209,7 @@ class BaseDatasetReader(object):
         np.random.set_state(saved_random_state)
         return selected_data
 
-    def compute_metric(self, accumulated):
+    def compute_metric(self, accumulated, *args, **kwargs):
         matching = [a == b for a, b in zip(accumulated["prediction"], accumulated["label"])]
         accuracy = sum(matching) / len(matching)
         return {"accuracy": accuracy}
@@ -622,7 +622,7 @@ class RaftReader(object):
             example["idx"] = example["ID"]
         return orig_data
 
-    def compute_metric(self, accumulated):
+    def compute_metric(self, accumulated, *args, **kwargs):
         data = []
         idxs = accumulated["idx"]
         predictions = accumulated["prediction"]
@@ -832,7 +832,7 @@ class CustomRegressionReader(CustomBaseReader):
                 } for v in values]
             elif info.startswith("log."):
                 values = neg(values)
-            data[info].extend(values) 
+            data[info].extend(values)
 
         result_df = pd.DataFrame(data)
         result_df.to_csv(self.config.dev_pred_file if is_dev else self.config.test_pred_file, index=False)
@@ -877,6 +877,8 @@ class CustomRegressionReader(CustomBaseReader):
         metrics["mse_std"] = np.std(mse)
 
         metrics["epoch"] = float(result_df.loc[0, "current_epoch"])
+        metrics["num_truncated_examples"] = (result_df["num_truncated"] != 0).sum()
+        metrics["num_truncated_tokens_avg"] = result_df["num_truncated"].mean()
 
         return metrics
 

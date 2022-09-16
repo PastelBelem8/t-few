@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import traceback
 from pytorch_lightning import LightningDataModule
 
 
@@ -12,18 +11,20 @@ def encode_and_truncate(input_str, add_special_tokens, tokenizer):
         # Note: overflowing tokens requires adding truncation and padding
         return_overflowing_tokens=True, 
         truncation=True, 
-        padding="max_length",
+        padding="longest",
     )
 
     overflow_map = output["overflow_to_sample_mapping"].tolist()
-
     keep_ids = np.unique(overflow_map) 
     trunc_ids = [i for i in range(len(overflow_map)) if i not in keep_ids]
     
-    input_ids = output["input_ids"]
-    num_truncated = (
-        input_ids[trunc_ids,:] != tokenizer.pad_token_id
-    ).sum().item()
+    input_ids = output["input_ids"][keep_ids,:]
+    if len(trunc_ids) > 1:
+        num_truncated = (
+            input_ids[trunc_ids,:] != tokenizer.pad_token_id
+        ).sum().item()
+    else:
+        num_truncated = 0
 
     return input_ids.squeeze(0), num_truncated
 
@@ -122,7 +123,7 @@ class FinetuneDatasetWithTemplate(torch.utils.data.dataset.Dataset):
         ]
         label = torch.LongTensor([example["label"]])
         idx = torch.LongTensor([example["idx"]])
-        return input_ids, target_ids, answer_choices_ids, label, idx, torch.LongTensor([num_truncated])
+        return input_ids, target_ids, answer_choices_ids, label, idx, num_truncated
 
 
 class PretrainDataModule(LightningDataModule):
@@ -190,17 +191,15 @@ def create_collate_fn(pad_token_id, pretrain):
         else:
             input_ids, target_ids = zip(*batch)
 
-        # Update 2022-09-14 @pastelbelem8
+        # Update 2022-08-14 @pastelbelem8
         # ---------------------------------------------------------------------
         # In an attempt to know exactly how many sequences are being truncated
         # and how its related with the model's performance.
         # ---------------------------------------------------------------------
-        seq_lens = [len(b[0]) for b in batch]
-        # ---------------------------------------------------------------------
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
         target_ids = torch.nn.utils.rnn.pad_sequence(target_ids, batch_first=True, padding_value=pad_token_id)
         output_batch = {
-            "input_seq_len": seq_lens,
+            "num_truncated": num_truncated,
             "input_ids": input_ids,
             "target_ids": target_ids,
         }
@@ -221,7 +220,6 @@ def create_collate_fn(pad_token_id, pretrain):
                     "answer_choices_ids": answer_choices_ids,
                     "labels": labels,
                     "idx": idx,
-                    "num_truncated": num_truncated,
                 }
             )
         return output_batch

@@ -12,7 +12,6 @@ class BaseTemplate(ABC):
         # We assume the placeholder columns are passed in the filling-in same order.
         self.template2example = {f"s{i+1}": col for i, col in enumerate(placeholders_cols)}
 
-
     def apply(self, example):
         # We get the placeholder values based on the map we created in config.
         placeholders_values = {placeholder: example[example_col] for placeholder, example_col in self.template2example.items()}
