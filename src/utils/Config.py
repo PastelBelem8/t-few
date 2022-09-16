@@ -125,6 +125,7 @@ class Config(object):
             "do_sample": False,
         }
         self.sampling_col = self.label_col
+        self.add_special_tokens = False
         # 2022-09-08: PastelBelem8
         # --------------------------------------------------------
 

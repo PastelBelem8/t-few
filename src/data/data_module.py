@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import traceback
 from pytorch_lightning import LightningDataModule
 
 
@@ -25,7 +26,7 @@ class FinetuneDataModule(LightningDataModule):
             self.train_dataset = self.dataset_reader.read_orig_dataset("train")
         self.dev_dataset = self.dataset_reader.read_orig_dataset("validation") # Dataset
 
-        extra_args = {} ##{"add_special_tokens": False} ## added on 12 sep 
+        extra_args = {"add_special_tokens": self.config.add_special_tokens} ##{"add_special_tokens": False} ## added on 12 sep 
         self.train_dataset = FinetuneDatasetWithTemplate(
             self.train_dataset, self.dataset_reader.get_train_template(), self.tokenizer, **extra_args
         )
@@ -172,9 +173,17 @@ def create_collate_fn(pad_token_id, pretrain):
         else:
             input_ids, target_ids = zip(*batch)
 
+        # Update 2022-08-14 @pastelbelem8
+        # ---------------------------------------------------------------------
+        # In an attempt to know exactly how many sequences are being truncated
+        # and how its related with the model's performance.
+        # ---------------------------------------------------------------------
+        seq_lens = [len(b[0]) for b in batch]
+        # ---------------------------------------------------------------------
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
         target_ids = torch.nn.utils.rnn.pad_sequence(target_ids, batch_first=True, padding_value=pad_token_id)
         output_batch = {
+            "input_seq_len": seq_lens,
             "input_ids": input_ids,
             "target_ids": target_ids,
         }
@@ -220,15 +229,17 @@ class EvalDataModule(LightningDataModule):
     def setup(self, stage):
         self.test_dataset = self.dataset_reader.read_orig_dataset("test") # Dataset
 
+        extra_args = {"add_special_tokens": self.config.add_special_tokens} ##{"add_special_tokens": False} ## added on 12 sep 
+        
         self.test_dataset = FinetuneDatasetWithTemplate(
-            self.test_dataset, self.dataset_reader.get_eval_template(), self.tokenizer
+            self.test_dataset, self.dataset_reader.get_eval_template(), self.tokenizer, **extra_args
         )
         print(f"Test size {len(self.test_dataset)}")
 
         if not self.test_only:
             self.dev_dataset = self.dataset_reader.read_orig_dataset("validation") # Dataset
             self.dev_dataset = FinetuneDatasetWithTemplate(
-                self.dev_dataset, self.dataset_reader.get_eval_template(), self.tokenizer
+                self.dev_dataset, self.dataset_reader.get_eval_template(), self.tokenizer, **extra_args
             )
             print(f"Dev size {len(self.dev_dataset)}")
         
