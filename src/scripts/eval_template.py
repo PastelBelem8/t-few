@@ -13,43 +13,54 @@ dict_dataset_2_template_idx = {
     "anli-r1": list(range(15)),
     "anli-r2": list(range(15)),
     "anli-r3": list(range(15)),
+    # Update 2022-09-20
+    "realsumm": list(range(9)),
 }
 
 
-def eval_random_template(model, method, descriptor):
+def eval_random_template(model, dataset, is_regression):
+    dataset = dataset.lower()
 
-    for seed in [0, 1, 32, 42, 1024]:
-        for dataset in ["copa", "h-swag", "storycloze", "winogrande", "wic", "wsc", "rte", "cb", "anli-r1", "anli-r2", "anli-r3"]:
-            if descriptor is None:
-                command = f"bash bin/eval-template.sh {seed} {model} {method} {dataset} -1"
-            else:
-                command = f"bash bin/eval-template-with-descriptor.sh {seed} {model} {method} {dataset} -1 {descriptor}"
-            subprocess.run([command], stdout=subprocess.PIPE, shell=True)
+    if is_regression:
+        dataset = dataset + "_reg"
+        exp_dir = f"experiments_balanced/{dataset}"
+    else:
+        exp_dir = f"experiments_balanced/{dataset}_2class"
+
+    command = f"bash bin/GEM-eval-template.sh {model} {dataset} -1 {exp_dir}"
+    subprocess.run([command], stdout=subprocess.PIPE, shell=True)
 
 
-def eval_all_templates(model, method, descriptor):
+def eval_all_templates(model, dataset, is_regression=True):
+    dataset = dataset.lower()
+    templates = dict_dataset_2_template_idx[dataset]
 
-    for seed in [0, 1, 32, 42, 1024]:
-        for dataset in ["copa", "h-swag", "storycloze", "winogrande", "wic", "wsc", "rte", "cb", "anli-r1", "anli-r2", "anli-r3"]:
-            for template_idx in dict_dataset_2_template_idx[dataset]:
-                if descriptor is None:
-                    command = f"bash bin/eval-template.sh {seed} {model} {method} {dataset} {template_idx}"
-                else:
-                    command = f"bash bin/eval-template-with-descriptor.sh {seed} {model} {method} {dataset} {template_idx} {descriptor}"
-                subprocess.run([command], stdout=subprocess.PIPE, shell=True)
+    if is_regression:
+        dataset = dataset + "_reg"
+        exp_dir = f"experiments_balanced/{dataset}"
+    else:
+        exp_dir = f"experiments_balanced/{dataset}_2class"
+    
+    for template_idx in templates:
+        print("\n" * 8)
+        print("=======================")
+        print("TEMPLATE", template_idx)
+        print("=======================")
+        print("\n" * 8)
+        command = f"bash bin/GEM-eval-template.sh {model} {dataset} {template_idx} {exp_dir}"
+        subprocess.run([command], stdout=subprocess.PIPE, shell=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-a", "--all_template_or_random_template", required=True, choices=["all", "random"])
-    parser.add_argument("-model", "--model", required=True)
-    parser.add_argument("-method", "--method", required=True)
-    parser.add_argument("-d", "--descriptor", default=None)
+    parser.add_argument("-r", "--reg_or_class", required=True, choices=["reg", "class"])
+    parser.add_argument("-model", "--model", default="t03b")
+    parser.add_argument("-dataset", "--dataset", default="realsumm")
     args = parser.parse_args()
 
-
     if args.all_template_or_random_template == "all":
-        eval_all_templates(args.model, args.method, args.descriptor)
+        eval_all_templates(args.model, args.dataset, is_regression=args.reg_or_class == "reg")
     else:
-        eval_random_template(args.model, args.method, args.descriptor)
+        eval_random_template(args.model, args.dataset, is_regression=args.reg_or_class == "reg")
 

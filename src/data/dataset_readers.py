@@ -11,7 +11,7 @@ import csv
 from typing import Dict, List, Optional, Tuple
 import re
 import pandas as pd
-from .custom_templates import SemanticCovTemplate, AdequacyTemplate
+from .custom_templates import SemanticCovTemplates, AdequacyTemplates
 from .sampling import BalancedSampler
 
 
@@ -663,6 +663,24 @@ class CustomBaseReader(ABC):
 
         self.data_dir = config.data_dir
         self.fine_tune_with_all = config.fine_tune_with_all
+    
+    def get_template(self, template_idx):
+        template_names = self.templates.all_template_names
+        if template_idx >= 0:
+            return self.templates[template_names[template_idx]]
+        elif template_idx < 0:
+            list_templates = []
+            for name in template_names:
+                list_templates.append(self.templates[name])
+
+            print(template_names)
+            return list_templates
+
+    def get_train_template(self):
+      return self.get_template(self.config.train_template_idx)
+
+    def get_eval_template(self):
+      return self.get_template(self.config.eval_template_idx)
 
     @abstractmethod
     def get_canonical_filename(self, split: str) -> str:
@@ -671,12 +689,6 @@ class CustomBaseReader(ABC):
     @abstractmethod
     def compute_metric(self, accumulated: dict, is_dev: bool=True) -> dict:
         raise NotImplemented("Must be overriden by subclasses")
-
-    def get_train_template(self):
-        return self.template
-
-    def get_eval_template(self):
-        return self.template
 
     def read_orig_dataset(self, split: str):
         """
@@ -797,13 +809,13 @@ class REALSummClassificationReader(CustomClassificationReader):
         """
         """
         super().__init__(config)
-        self.template = SemanticCovTemplate(config, self.answer_choices, "ref_summ", "sys_summ")
+        self.templates = SemanticCovTemplates(config, self.answer_choices, "ref_summ", "sys_summ")
 
 
 class WMTClassificationReader(CustomClassificationReader):
     def __init__(self, config):
         super().__init__(config)
-        self.template = AdequacyTemplate(config, self.answer_choices, "mt", "ref")
+        self.templates = AdequacyTemplates(config, self.answer_choices, "mt", "ref")
 
 
 class CustomRegressionReader(CustomBaseReader):
@@ -868,27 +880,28 @@ class CustomRegressionReader(CustomBaseReader):
         metrics["digits_pct"] = num_digits / len(accumulated["prediction"])
 
         metrics["err_len"] = len(errs)
-        metrics["err_avg"] = np.mean(errs)
-        metrics["mae_avg"] = np.mean(mae)
-        metrics["mse_avg"] = np.mean(mse)
+        metrics["err_avg"] = float(np.mean(errs))
+        metrics["mae_avg"] = float(np.mean(mae))
+        metrics["mse_avg"] = float(np.mean(mse))
         
-        metrics["err_std"] = np.std(errs)
-        metrics["mae_std"] = np.std(mae)
-        metrics["mse_std"] = np.std(mse)
+        metrics["err_std"] = float(np.std(errs))
+        metrics["mae_std"] = float(np.std(mae))
+        metrics["mse_std"] = float(np.std(mse))
 
         metrics["epoch"] = float(result_df.loc[0, "current_epoch"])
-        metrics["num_truncated_examples"] = (result_df["num_truncated"] != 0).sum()
-        metrics["num_truncated_tokens_avg"] = result_df["num_truncated"].mean()
+        metrics["num_truncated_examples"] = float((result_df["num_truncated"] != 0).sum())
+        metrics["num_truncated_tokens_avg"] = float(result_df["num_truncated"].mean())
 
         return metrics
+
 
 class REALSummRegressionReader(CustomRegressionReader):
     def __init__(self, config):
         super().__init__(config)
-        self.template = SemanticCovTemplate(config, None, "ref_summ", "sys_summ")
+        self.templates = SemanticCovTemplates(config, None, "ref_summ", "sys_summ")
 
 
 class WMTRegressionReader(CustomRegressionReader):
     def __init__(self, config):
         super().__init__(config)
-        self.template = AdequacyTemplate(config, None, "mt", "ref")
+        self.templates = AdequacyTemplates(config, None, "mt", "ref")

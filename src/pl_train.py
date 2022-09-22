@@ -61,13 +61,12 @@ def main(config):
     
     print("----- train -----")
     trainer.fit(model, datamodule)
+    # print("----- dev -----")
+    # trainer.validate(model, datamodule)
 
-    print("----- dev -----")
-    trainer.validate(model, datamodule)
-
-    print("----- test -----")
-    datamodule = EvalDataModule(config, tokenizer, dataset_reader, test_only=True)
-    trainer.test(model, datamodule)
+    # print("----- test -----")
+    # datamodule = EvalDataModule(config, tokenizer, dataset_reader, test_only=True)
+    # trainer.test(model, datamodule)
 
 
 if __name__ == "__main__":

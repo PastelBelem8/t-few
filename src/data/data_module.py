@@ -21,7 +21,7 @@ def encode_and_truncate(input_str, add_special_tokens, tokenizer):
     input_ids = output["input_ids"][keep_ids,:]
     if len(trunc_ids) > 1:
         num_truncated = (
-            input_ids[trunc_ids,:] != tokenizer.pad_token_id
+            output["input_ids"][trunc_ids,:] != tokenizer.pad_token_id
         ).sum().item()
     else:
         num_truncated = 0

@@ -12,6 +12,7 @@ from .fishmask import fishmask_plugin_on_init, fishmask_plugin_on_optimizer_step
 from .utils import compute_scores_for_enc_inputs
 
 
+
 class EncoderDecoder(LightningModule):
     """
     Encoder Decoder
@@ -208,6 +209,7 @@ class EncoderDecoder(LightningModule):
             if len(invalid_probas) > 1:
                 print("(inference) Mean invalid probas (before norm):", mean(invalid_probas))
                 print("(inference) Invalid probas (before norm):", invalid_probas)
+                print("=====================")
 
             # Update 2022-09-14, @PastelBelem8
             # ---------------------------------------------------------------------
@@ -360,7 +362,7 @@ class EncoderDecoder(LightningModule):
             # compute and log results
             metrics = self.dataset_reader.compute_metric(accumulated)
             for key, value in accumulated.items():
-                if key.startswith("log."):
+                if key.startswith("log.") or key.startswith("num_"):
                     metrics[key.replace("log.", "")] = mean(value)
             
             result_str = json.dumps(metrics) + "\n"
@@ -535,7 +537,6 @@ class EncoderDecoderRegression(EncoderDecoder):
             "log.label": target_logprobs.tolist(),
             "_log.example_scores": log_scores_per_example,
             "current_epoch": [self.current_epoch] * len(input_ids),
-            # "input_num_truncated_tokens": batch["input_num_truncated_tokens"],
-            # "target_num_truncated_tokens": batch["target_num_truncated_tokens"],
+            "num_truncated": [int(n) for n in batch["num_truncated"]],
         }
         return batch_output
