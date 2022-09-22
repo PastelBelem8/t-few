@@ -117,7 +117,6 @@ class Config(object):
         self.id_col = "index"
         self.data_dir = "./data"
         self.dataset_classes = None
-        self.fine_tune_with_all = False
         self.use_regress = False
         self.regress_generate_configs: dict = {
             "max_length": 4, 

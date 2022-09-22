@@ -662,7 +662,6 @@ class CustomBaseReader(ABC):
         self.sampling_col = config.sampling_col
 
         self.data_dir = config.data_dir
-        self.fine_tune_with_all = config.fine_tune_with_all
     
     def get_template(self, template_idx):
         template_names = self.templates.all_template_names
@@ -699,10 +698,7 @@ class CustomBaseReader(ABC):
         if os.path.exists(DATASETS_OFFLINE):
             orig_data = load_from_disk(os.path.join(DATASETS_OFFLINE))
         else:
-            if split == "train" and self.fine_tune_with_all:
-                files = {"train": self.get_canonical_filename("all") + ".csv"}
-            else:
-                files = {split: f"{self.get_canonical_filename(split)}.csv"}
+            files = {split: f"{self.get_canonical_filename(split)}.csv"}
             orig_data = load_dataset(self.data_dir, data_files=files, cache_dir=os.environ["HF_HOME"])
 
         def rename_cols(ex):
