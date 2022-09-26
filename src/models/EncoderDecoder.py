@@ -483,60 +483,95 @@ class EncoderDecoderRegression(EncoderDecoder):
 
         # Get the default generation configs
         self.generate_configs = config.regress_generate_configs
+        self.decoding_range = config.regression_constrain_range
+
+    @property
+    def constrained_ids(self):
+        if hasattr(self, "_constrained_ids"):
+            return self._constrained_ids
+        else:
+            self._constrained_ids = [
+                self.tokenizer(str(i), add_special_tokens=self.config.add_special_tokens)["input_ids"][0]
+                for i in range(*self.decoding_range)
+            ]
+            return self._constrained_ids
 
     def predict(self, batch):
-        # Labels are the corresponding targets
-        input_ids, labels, target_ids = batch["input_ids"], batch["labels"], batch["target_ids"]
-
+        
+        if self.config.model_modifier == "intrinsic":
+            from .intrinsic import intrinsic_plugin_on_step
+            intrinsic_plugin_on_step(self)
+        
+        if self.config.split_option_at_inference:
+            raise NotImplemented("Not implemented for EncoderDecoderRegression")
+        
         if not self.config.split_option_at_inference:
-            attention_mask = (input_ids != self.tokenizer.pad_token_id).float()  # [bs, max_seq_len]
+            # `input_ids` is an array-like with shape batch_size x max_seq_len
+            # `target_ids` is the encoded version of the labels and should be an array of
+            # shape batch_size x 1
+            input_ids, target_ids = batch["input_ids"], batch["target_ids"]
+            batch_size = len(target_ids)
+            assert target_ids.shape[1] == 1, "Unexpected encoding: labels were encoded as more than 1 token piece."
+            # ^Note: For the time being, we're considering targets that are encoded to a single token
+            # we add this assertion error for a precaussion for the future. Functionality may have to
+            # evolve further in the future.
+            attention_mask = (input_ids != self.tokenizer.pad_token_id).float()
+            # Encoder hidden states for each token in the sequences, it is an array-like
+            # with shape `batch_size x max_seq_len x 2048`
+            encoder_hidden_states = self.model.encoder(input_ids=input_ids, attention_mask=attention_mask)[0]
 
-            model_output = self.model.generate(
-                input_ids = input_ids,
+            # `decoder_input_ids` should be a 0-vector of dimensions batch_size x 1
+            decoder_input_ids = torch.zeros((batch_size, 1), dtype=torch.long, device=self.device)
+            decoder_attention_mask = (decoder_input_ids == decoder_input_ids).float()
+
+            model_output = self.model(
                 attention_mask=attention_mask,
-                # Force truncation (ensure the last token is always the EOS)
-                forced_eos_token_id=self.tokenizer.eos_token_id,
-                **self.generate_configs
+                encoder_outputs=[encoder_hidden_states],
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
             )
+            def get_orig_ids(constrained_ids):
+                return [self.constrained_ids[idd] for idd in constrained_ids]
+    
+            # Select the logit values for the constrained ids of size
+            # batch_size x 1 x number of constrained_ids
+            model_logits = F.log_softmax(model_output.logits, dim=-1).squeeze()
+            model_logits_constrained = model_logits[..., self.constrained_ids]
+            pred_score, prediction_ids = model_logits_constrained.max(dim=-1)
+            prediction_ids = get_orig_ids(prediction_ids)
+            prediction = self.tokenizer.batch_decode(prediction_ids)
 
-            model_logprobs, model_logprobs_per_token = compute_scores_for_enc_inputs(
-                encoded_src={"input_ids": input_ids, "attention_mask": attention_mask},
-                encoded_tgt={"input_ids": model_output},
-                model=self.model,
-                tokenizer=self.tokenizer,
-                length_norm=self.config.length_norm,
-            )
+            label_score = model_logits[range(batch_size), target_ids.squeeze()]
 
-            target_logprobs, target_logprobs_per_token = compute_scores_for_enc_inputs(
-                encoded_src={"input_ids": input_ids, "attention_mask": attention_mask},
-                encoded_tgt={"input_ids": target_ids},
-                model=self.model,
-                tokenizer=self.tokenizer,
-                length_norm=self.config.length_norm,
-            )
+            top5_examples, top5_constrained_examples = [], []
+            top5 = torch.topk(model_logits.squeeze(), k=5, dim=-1)
+            top5_constrained = torch.topk(model_logits_constrained.squeeze(), k=5, dim=-1)       
 
-            preds = [
-                self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-                for g in model_output
-            ]
+            for i in range(batch_size):
+                values, indices = top5.values[i], top5.indices[i]
+                values_cstr, indices_cstr = top5_constrained.values[i], top5_constrained.indices[i]
+                indices_cstr = get_orig_ids(indices_cstr)
 
-        else:
-            raise NotImplemented("Not implemented for custom EncoderDecoderRegression")
+                top5_examples.append({
+                    "tokens": self.tokenizer.convert_ids_to_tokens(indices),
+                    "log.tokens_scores": values.tolist(),
+                })
 
-        log_scores_per_example = [{
-            "example_id": bid,
-            "log.scores": model_logprobs_per_token[i].tolist(),
-            "log.target": target_logprobs_per_token[i].tolist(),
-            } for i, bid in enumerate(batch["idx"].tolist())]
+                top5_constrained_examples.append({
+                    "tokens": self.tokenizer.convert_ids_to_tokens(indices_cstr),
+                    "log.tokens_scores": values_cstr.tolist(),
+                })
 
         batch_output = {
-            "prediction": preds,
-            "label": labels.tolist(),
             "idx": batch["idx"].tolist(),
-            "log.score": model_logprobs.tolist(),
-            "log.label": target_logprobs.tolist(),
-            "_log.example_scores": log_scores_per_example,
-            "current_epoch": [self.current_epoch] * len(input_ids),
-            "num_truncated": [int(n) for n in batch["num_truncated"]],
+            "label": batch["labels"].tolist(),
+            "prediction": prediction,
+            "log.pred_score": pred_score.tolist(),
+            "log.label": label_score.tolist(),
+            "num_truncated": batch["num_truncated"],
+            "top5_unconstrained": top5_examples,
+            "top5_constrained": top5_constrained_examples,
+            "current_epoch": [self.current_epoch] * len(prediction),
         }
+
         return batch_output
