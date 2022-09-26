@@ -1,8 +1,7 @@
 {
     "dataset": "REALSumm",
     "use_regress": true,
-    "data_dir": "/home/cbelem/projects/GEM-workshop-peft-experiments/experiments/summ_data/regression/REALSumm",
-    "label_col": "target",
+    "data_dir": "/home/cbelem/projects/GEM-workshop-peft-experiments/datasets/summ_data/REALSumm/quantile/regression",
     "id_col": "index",
     "sampling_col": "bin",
     "batch_size": 8,
@@ -12,7 +11,9 @@
     "mc_loss": 0,
     "unlikely_loss": 0,
     "few_shot": false,
-    "eval_before_training": true,
     "eval_epoch_interval": 100,
-    "allow_skip_exp": false
+    "allow_skip_exp": false,
+    "label_col": "target_rescaled",
+    "filepath_suffix": "rescaled_1_50.csv",
+    "regression_constrain_range": "(1, 51)"
 }

@@ -1,5 +1,4 @@
 {
-    "dataset": "T0Mixture",
     "batch_size": 2,
     "grad_accum_factor": 1,
     "few_shot": false,

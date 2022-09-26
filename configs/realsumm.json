@@ -1,5 +1,6 @@
 {
     "dataset": "REALSumm",
+    "dataset_classes": 2,
     "data_dir": "/home/cbelem/projects/GEM-workshop-peft-experiments/datasets/summ_data/REALSumm/quantile",
     "label_col": "label",
     "id_col": "index",
@@ -10,6 +11,5 @@
     "mc_loss": 1,
     "unlikely_loss": 1,
     "few_shot": false,
-    "eval_before_training": true,
     "add_special_tokens": false
 }
