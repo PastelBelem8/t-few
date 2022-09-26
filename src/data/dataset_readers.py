@@ -662,6 +662,7 @@ class CustomBaseReader(ABC):
         self.sampling_col = config.sampling_col
 
         self.data_dir = config.data_dir
+        self.suffix_path = config.filepath_suffix
     
     def get_template(self, template_idx):
         template_names = self.templates.all_template_names
@@ -672,7 +673,7 @@ class CustomBaseReader(ABC):
             for name in template_names:
                 list_templates.append(self.templates[name])
 
-            print(template_names)
+            print("Using templates:", template_names)
             return list_templates
 
     def get_train_template(self):
@@ -698,7 +699,10 @@ class CustomBaseReader(ABC):
         if os.path.exists(DATASETS_OFFLINE):
             orig_data = load_from_disk(os.path.join(DATASETS_OFFLINE))
         else:
-            files = {split: f"{self.get_canonical_filename(split)}.csv"}
+            if self.suffix_path is None:
+                files = {split: f"{self.get_canonical_filename(split)}.csv"}
+            else:
+                files = {split: f"{self.get_canonical_filename(split)}.{self.suffix_path}"}
             orig_data = load_dataset(self.data_dir, data_files=files, cache_dir=os.environ["HF_HOME"])
 
         def rename_cols(ex):
@@ -756,7 +760,7 @@ class CustomClassificationReader(CustomBaseReader):
     }
 
     def __init__(self, config):
-        super().__init__(config) # FIXME
+        super().__init__(config)
 
         self.num_classes = config.dataset_classes
         self.answer_choices = self.CLASSES_2_TEXT.get(self.num_classes)

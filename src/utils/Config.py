@@ -125,6 +125,11 @@ class Config(object):
         }
         self.sampling_col = self.label_col
         self.add_special_tokens = False
+        
+        # 2022-09-12: PastelBelem8
+        # By default, there will be no suffix and we will look for files "train.csv"
+        self.filepath_suffix = None
+        self.regression_constrain_range = None
         # 2022-09-08: PastelBelem8
         # --------------------------------------------------------
 
@@ -138,6 +143,8 @@ class Config(object):
             self.update_kwargs(kwargs)
 
         self.set_exp_dir()
+        if self.regression_constrain_range is not None and isinstance(self.regression_constrain_range, str):
+            self.regression_constrain_range = eval(self.regression_constrain_range)
 
     def update_kwargs(self, kwargs, eval=True):
         for (k, v) in kwargs.items():
