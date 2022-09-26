@@ -107,3 +107,11 @@ class AdequacyTemplates(CollectionTemplates):
             ]
         
         super().__init__(templates, config, answer_choices, *placeholders_cols)
+
+
+class T5Templates(CollectionTemplates):
+    def __init__(self, config, answer_choices, *placeholders_cols):
+        templates = [
+            ("stsb", "stsb sentence1: {s1} sentence2: {s2}."),          
+        ]
+        super().__init__(templates, config, answer_choices, *placeholders_cols)
