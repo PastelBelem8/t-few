@@ -112,6 +112,7 @@ class AdequacyTemplates(CollectionTemplates):
 class T5Templates(CollectionTemplates):
     def __init__(self, config, answer_choices, *placeholders_cols):
         templates = [
-            ("stsb", "stsb sentence1: {s1} sentence2: {s2}."),          
+            ("stsb", "stsb sentence1: {s1} sentence2: {s2}."),         
+            # ("realsumm", "semantics sentence1: {s1} sentence2: {s2}."),          
         ]
         super().__init__(templates, config, answer_choices, *placeholders_cols)

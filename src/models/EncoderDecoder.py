@@ -482,7 +482,6 @@ class EncoderDecoderRegression(EncoderDecoder):
         super().__init__(config, tokenizer, transformer, dataset_reader)
 
         # Get the default generation configs
-        self.generate_configs = config.regress_generate_configs
         self.decoding_range = config.regression_constrain_range
 
     @property

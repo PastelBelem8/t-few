@@ -11,7 +11,7 @@ import csv
 from typing import Dict, List, Optional, Tuple
 import re
 import pandas as pd
-from .custom_templates import SemanticCovTemplates, AdequacyTemplates
+from .custom_templates import SemanticCovTemplates, AdequacyTemplates, T5Templates
 from .sampling import BalancedSampler
 
 
@@ -854,7 +854,7 @@ class CustomRegressionReader(CustomBaseReader):
         errs_p, errs_t, errs, mae, mse = [], [], [], [], []
         for p, t in zip(accumulated["prediction"], accumulated["label"]):
             # label is already a number
-            p = p.strip() # FIXME: make sure it's the right float :)
+            p = p.strip()
 
             num_correct += (p == str(t))
             num_digits += p.isdigit()
@@ -898,10 +898,17 @@ class CustomRegressionReader(CustomBaseReader):
 class REALSummRegressionReader(CustomRegressionReader):
     def __init__(self, config):
         super().__init__(config)
-        self.templates = SemanticCovTemplates(config, None, "ref_summ", "sys_summ")
+
+        if "t5" in config.origin_model.lower():
+            self.templates = T5Templates(config, None, "ref_summ", "sys_summ")
+        else:
+            self.templates = SemanticCovTemplates(config, None, "ref_summ", "sys_summ")
 
 
 class WMTRegressionReader(CustomRegressionReader):
     def __init__(self, config):
         super().__init__(config)
-        self.templates = AdequacyTemplates(config, None, "mt", "ref")
+        if "t5" in config.origin_model.lower():
+            self.templates = T5Templates(config, None, "mt", "ref")
+        else:
+            self.templates = AdequacyTemplates(config, None, "mt", "ref")

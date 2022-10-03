@@ -118,11 +118,6 @@ class Config(object):
         self.data_dir = "./data"
         self.dataset_classes = None
         self.use_regress = False
-        self.regress_generate_configs: dict = {
-            "max_length": 4, 
-            "num_beams": 1,
-            "do_sample": False,
-        }
         self.sampling_col = self.label_col
         self.add_special_tokens = False
         
