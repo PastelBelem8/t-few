@@ -35,7 +35,7 @@ do
     echo ------------------------------------------------------------------------------
     echo "Baseline 4: Fine tune TO on training set (w/o IA3): from checkpoint"
     echo ------------------------------------------------------------------------------
-    experiment_name=${model}__baseline__ia3_pretrained100k_ft_train_no_ia3
+    experiment_name=${model}__baseline_ia3_pretrained100k_ft_train_no_ia3
     python -m src.pl_train -c ${model}.json+ia3.json+pretrain.json+${dataset}.json -k load_weight="pretrained_checkpoints/${model}_ia3_finish.pt" save_model=True exp_name=${experiment_name} num_steps=1000
 
     # echo ------------------------------------------------------------------------------

@@ -42,3 +42,10 @@ echo "Baseline 3: Fine tune TO on training set (w/o IA3)"
 echo ------------------------------------------------------------------------------
 orig_exp_name=${model}__baseline_no_ckpt_ft_train_no_ia3
 python -m src.pl_train -c ${model}.json+pretrain.json+${dataset}.json -k load_weight=${exp_dir}/${orig_exp_name}/finish.pt save_model=False exp_name=${orig_exp_name}_template_${template_idx} allow_skip_exp=False num_steps=0 eval_template_idx=${template_idx}  eval_before_training=True
+
+
+echo ------------------------------------------------------------------------------
+echo "Baseline 4: Fine tune TO on training set (w/o IA3): from checkpoint"
+echo ------------------------------------------------------------------------------
+experiment_name=${model}__baseline_ia3_pretrained100k_ft_train_no_ia3
+python -m src.pl_train -c ${model}.json+ia3.json+pretrain.json+${dataset}.json -k load_weight="pretrained_checkpoints/${model}_ia3_finish.pt" save_model=False exp_name=${orig_exp_name}_template_${template_idx} allow_skip_exp=False num_steps=0 eval_template_idx=${template_idx}  eval_before_training=True
